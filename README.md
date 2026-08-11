@@ -1,561 +1,532 @@
 # 🛡️ MaskGate
 
-> **GenAI-Assisted Dynamic Data Masking for Secure Database Access**
+**A Proxy-Based Dynamic Data Masking Framework for PostgreSQL**
 
-MaskGate is a privacy-preserving database access system designed to help developers work with database data without unnecessarily exposing sensitive information.
-
-The current prototype focuses on **PostgreSQL** and uses a **Python service, LangChain, and a Large Language Model (LLM)** to analyze database schemas, identify potentially sensitive fields, recommend masking policies, and dynamically mask sensitive information returned from database queries.
+MaskGate enables developers to query production-like databases securely by masking sensitive information in real time while maintaining data relationships and supporting GDPR-compliant access.
 
 ---
 
-## 🚨 Problem
+## 🎯 Problem
 
-Developers often need realistic database data to debug and investigate application issues. However, providing direct access to production or sensitive databases can expose Personally Identifiable Information (PII) and other confidential data.
+Developers often need access to realistic database data when debugging applications. However, production databases can contain sensitive information such as:
 
-Traditional approaches may require manually identifying sensitive columns and configuring masking rules in advance. This creates two major problems:
+* Names
+* Email addresses
+* Phone numbers
+* Addresses
+* Dates of birth
+* Medical information
+* Diagnoses
+* Allergies
+* Other personally identifiable information (PII)
 
-1. Sensitive fields may be overlooked during manual configuration.
-2. Developers may still receive sensitive information that was not included in the initial masking rules.
+Giving developers unrestricted access to this information creates privacy and security risks.
 
-MaskGate explores how **Generative AI can assist with both policy creation and runtime sensitive-data detection** while keeping the original PostgreSQL data unchanged.
+Manually identifying every sensitive database field and creating masking rules can also be difficult and error-prone.
+
+### The problem MaskGate explores
+
+> **How can Generative AI assist developers and administrators in identifying and dynamically masking sensitive database information while preserving useful data for debugging?**
 
 ---
 
-## 💡 Solution
+# 💡 Proposed Solution
 
-MaskGate introduces an AI-assisted masking workflow:
+MaskGate introduces an AI-assisted masking workflow.
 
 ```text
-                 ┌─────────────────────┐
-                 │       Admin         │
-                 └──────────┬──────────┘
-                            │
-                            ▼
-                 ┌─────────────────────┐
-                 │    MaskGate UI      │
-                 └──────────┬──────────┘
-                            │
-                            ▼
-                 ┌─────────────────────┐
-                 │   Python Service    │
-                 │      (Flask)        │
-                 └──────────┬──────────┘
-                            │
-                 ┌──────────▼──────────┐
-                 │     PostgreSQL      │
-                 │  Schema / Tables /  │
-                 │  Columns / Types    │
-                 └──────────┬──────────┘
-                            │
-                            ▼
-                 ┌─────────────────────┐
-                 │     LangChain       │
-                 │         +           │
-                 │        LLM          │
-                 └──────────┬──────────┘
-                            │
-                            ▼
-                 ┌─────────────────────┐
-                 │ Masking Suggestions │
-                 └──────────┬──────────┘
-                            │
-                       Admin Review
-                            │
-                            ▼
-                 ┌─────────────────────┐
-                 │   Masking Policies  │
-                 └──────────┬──────────┘
-                            │
-                            ▼
-Developer ──► Query ──► PostgreSQL
-                            │
-                            ▼
-                    Query Result
-                            │
-                            ▼
-                 ┌─────────────────────┐
-                 │  Masking Engine     │
-                 │                     │
-                 │ Rule-based Masking  │
-                 │         +           │
-                 │ GenAI Safety Scan   │
-                 └──────────┬──────────┘
-                            │
-                            ▼
-                    Masked Response
-                            │
-                            ▼
-                       Developer
+                    ┌─────────────────────┐
+                    │       Admin         │
+                    └──────────┬──────────┘
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │   Admin Dashboard   │
+                    └──────────┬──────────┘
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │      FastAPI        │
+                    │   Python Backend    │
+                    └──────────┬──────────┘
+                               │
+                 ┌─────────────┼─────────────┐
+                 │             │             │
+                 ▼             ▼             ▼
+          ┌────────────┐ ┌────────────┐ ┌────────────┐
+          │ PostgreSQL │ │ LangChain  │ │  Masking   │
+          │            │ │    + LLM   │ │   Engine   │
+          └─────┬──────┘ └─────┬──────┘ └─────┬──────┘
+                │              │              │
+                └──────────────┼──────────────┘
+                               ▼
+                    ┌─────────────────────┐
+                    │ Masking Policies    │
+                    │ + Runtime Detection │
+                    └──────────┬──────────┘
+                               │
+                               ▼
+                       Masked Results
 ```
 
 ---
 
-# 🎯 Objectives
+# 🚀 Current MVP
 
-MaskGate aims to:
+The current implementation is intentionally focused on the core masking problem.
 
-- Protect sensitive information during database access.
-- Reduce manual effort when creating masking policies.
-- Use GenAI to identify potentially sensitive database fields.
-- Allow administrators to review and approve AI-generated masking suggestions.
-- Apply masking rules dynamically without modifying the original database.
-- Detect sensitive information that may have been missed by predefined rules.
-- Provide developers with useful data for debugging while reducing privacy risks.
-- Establish an architecture that can later support additional databases and access methods.
+### Current scope
 
----
-
-# ✨ Core Features
-
-## 1. PostgreSQL Schema Discovery
-
-MaskGate connects to a PostgreSQL database and retrieves metadata such as:
-
-- Databases
-- Schemas
-- Tables
-- Columns
-- Data types
-- Primary keys
-- Foreign keys
-- Indexes
-- Relationships
-
-Example:
-
-```text
-PostgreSQL
-│
-└── public
-    │
-    ├── users
-    │   ├── id
-    │   ├── name
-    │   ├── email
-    │   ├── phone
-    │   └── address
-    │
-    └── orders
-        ├── id
-        ├── user_id
-        └── amount
-```
-
----
-
-## 2. AI-Assisted Sensitive Data Identification
-
-The database schema is provided to an LLM through LangChain.
-
-The LLM analyzes the schema and recommends potentially sensitive fields.
-
-Example:
-
-| Table | Column | Risk | Recommendation |
-|---|---|---|---|
-| users | email | High | Email masking |
-| users | phone | High | Last 4 digits |
-| users | address | High | Partial masking |
-| users | name | Medium | Partial masking |
-| users | id | Low | No masking |
-
-The AI provides **recommendations rather than directly modifying the database**.
-
----
-
-## 3. Administrator Review
-
-AI-generated recommendations are presented to the administrator.
-
-```text
-AI Recommendation
-       │
-       ▼
-Admin Review
-       │
-   ┌───┴────┐
-   ▼        ▼
-Approve   Reject
-   │
-   ▼
-Masking Policy
-```
-
-This keeps the administrator in control of the final masking policy.
-
----
-
-## 4. Dynamic Data Masking
-
-Approved policies are applied when query results are returned.
-
-Example:
-
-### Original database value
-
-```text
-john.doe@gmail.com
-```
-
-### Developer receives
-
-```text
-j***@gmail.com
-```
-
-The original database value remains unchanged.
-
----
-
-## 5. Runtime Sensitive Data Detection
-
-MaskGate includes an additional protection layer for information that may have been missed during initial policy creation.
-
-```text
-Database Result
-       │
-       ▼
-Rule-Based Masking
-       │
-       ▼
-GenAI Sensitive Data Scan
-       │
-       ├── No sensitive data
-       │        ↓
-       │     Return
-       │
-       └── Sensitive data detected
-                ↓
-             Mask
-                ↓
-          Return Result
-```
-
-This provides a second layer of protection against sensitive information that may have slipped through the predefined rules.
-
----
-
-# 🏗️ Current Architecture
-
-The current prototype intentionally uses a simplified architecture to keep development focused on the core masking problem.
-
-```text
-┌──────────────────────────────────────┐
-│              Admin / User            │
-└──────────────────┬───────────────────┘
-                   │
-                   ▼
-┌──────────────────────────────────────┐
-│             Flask API                │
-│          Python Application          │
-└──────────────────┬───────────────────┘
-                   │
-          ┌────────┴─────────┐
-          │                  │
-          ▼                  ▼
-┌─────────────────┐   ┌─────────────────┐
-│   PostgreSQL    │   │    LangChain    │
-│                 │   │       +         │
-│ Schema / Query  │   │      LLM        │
-└────────┬────────┘   └────────┬────────┘
-         │                     │
-         └──────────┬──────────┘
-                    ▼
-          ┌───────────────────┐
-          │   Masking Engine  │
-          └─────────┬─────────┘
-                    │
-                    ▼
-            Masked Response
-```
+1. Connect to PostgreSQL.
+2. Discover database schemas.
+3. Discover tables and columns.
+4. Expose schema information through FastAPI.
+5. Display schema information in the admin interface.
+6. Send schema metadata to LangChain/LLM.
+7. Generate masking recommendations.
+8. Allow an administrator to review recommendations.
+9. Store approved masking policies.
+10. Process controlled database queries.
+11. Apply deterministic masking to query results.
+12. Perform an additional GenAI sensitive-data scan.
+13. Mask sensitive information detected at runtime.
+14. Test and document the system.
 
 ---
 
 # 🔄 Core Workflow
 
-## Phase 1 — Schema Analysis
+## Phase 1 — Schema Discovery
 
 ```text
-Connect PostgreSQL
-       ↓
-Retrieve Database Metadata
-       ↓
-Extract Schema Information
-       ↓
-Send Structured Schema to LLM
-       ↓
-Generate Masking Recommendations
-```
-
-## Phase 2 — Policy Creation
-
-```text
-AI Recommendations
-       ↓
-Administrator Review
-       ↓
-Approve / Modify / Reject
-       ↓
-Save Masking Policies
-```
-
-## Phase 3 — Query Processing
-
-```text
-User Query
-    ↓
-Query Analysis
-    ↓
-Validate Against Policies
-    ↓
-Execute Query
-    ↓
-Retrieve Results
-```
-
-## Phase 4 — Result Protection
-
-```text
-Query Results
-     ↓
-Rule-Based Masking
-     ↓
-GenAI Sensitive Data Detection
-     ↓
-Additional Masking if Required
-     ↓
-Return Safe Results
+PostgreSQL
+    │
+    ▼
+Python Database Layer
+    │
+    ▼
+FastAPI
+    │
+    ▼
+Schema / Tables / Columns
+    │
+    ▼
+Admin Dashboard
 ```
 
 ---
 
-# 🧠 Role of Generative AI
+## Phase 2 — AI Masking Recommendations
 
-Generative AI is used in two primary areas.
+```text
+PostgreSQL Schema
+       │
+       ▼
+Schema Metadata
+       │
+       ▼
+LangChain
+       │
+       ▼
+LLM
+       │
+       ▼
+Sensitive Field Detection
+       │
+       ▼
+Masking Recommendations
+```
 
-### 1. AI-Assisted Policy Generation
+Example:
 
-The LLM analyzes database metadata and recommends:
+| Table           | Column      | Sensitivity | Recommendation |
+| --------------- | ----------- | ----------- | -------------- |
+| patients        | full_name   | Medium      | Partial        |
+| patients        | email       | High        | Email          |
+| patients        | phone       | High        | Last 4         |
+| patients        | address     | High        | Partial        |
+| patients        | blood_group | High        | Redact         |
+| medical_records | diagnosis   | High        | Redact         |
+| medical_records | allergies   | High        | Redact         |
 
-- Potentially sensitive columns
-- Sensitivity levels
-- Suitable masking strategies
-- Additional fields that may require protection
-
-### 2. Runtime Sensitive Data Detection
-
-The LLM can inspect query results for potentially sensitive information that was not covered by the predefined masking policies.
-
-The AI acts as an **additional detection layer**, not as the sole security mechanism.
+The LLM provides **recommendations**. It does not directly modify the database.
 
 ---
 
-# 🔐 Example
+# 👨‍💻 Administrator Review
 
-Suppose PostgreSQL contains:
-
-```sql
-CREATE TABLE users (
-    id SERIAL PRIMARY KEY,
-    name VARCHAR(100),
-    email VARCHAR(150),
-    phone VARCHAR(20),
-    address TEXT
-);
-```
-
-The database contains:
+The administrator reviews the AI recommendations.
 
 ```text
-John Smith
+AI Recommendation
+        │
+        ▼
+Admin Review
+        │
+   ┌────┴────┐
+   │         │
+Approve    Reject
+   │
+   ▼
+Masking Policy
+```
+
+This keeps the administrator in control of the final masking configuration.
+
+---
+
+# 🔐 Dynamic Data Masking
+
+Approved masking policies are applied to query results before they are returned to the developer.
+
+The original PostgreSQL data is not modified.
+
+### Example
+
+Original:
+
+```text
 john.smith@gmail.com
-0771234567
-Colombo, Sri Lanka
 ```
 
-MaskGate may generate:
+Developer receives:
 
 ```text
-name     → PARTIAL
-email    → EMAIL
-phone    → LAST4
-address  → PARTIAL
-```
-
-The developer receives:
-
-```text
-J*** S****
 j***@gmail.com
-*******4567
-C******, Sri Lanka
 ```
 
-while the original PostgreSQL records remain unchanged.
+Original:
+
+```text
+0771234567
+```
+
+Developer receives:
+
+```text
+******4567
+```
+
+---
+
+# 🧠 Runtime GenAI Detection
+
+MaskGate also introduces a second protection layer.
+
+A sensitive field may not have been identified during the initial policy-generation stage.
+
+Therefore, returned data can be checked again.
+
+```text
+Developer Query
+      │
+      ▼
+PostgreSQL
+      │
+      ▼
+Query Results
+      │
+      ▼
+Approved Masking Rules
+      │
+      ▼
+GenAI Sensitive Data Detection
+      │
+      ├───────────────┐
+      │               │
+      ▼               ▼
+No Sensitive      Sensitive
+Data Found        Data Found
+      │               │
+      │               ▼
+      │          Additional Masking
+      │               │
+      └───────┬───────┘
+              ▼
+        Final Response
+              │
+              ▼
+          Developer
+```
+
+The GenAI layer is an **additional detection mechanism**, not the only security control.
+
+---
+
+# 🏗️ Architecture
+
+The current MVP uses a simplified architecture so development can focus on the core masking functionality.
+
+```text
+                    ┌──────────────────┐
+                    │      Admin       │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │  Admin Dashboard │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │     FastAPI      │
+                    │  Python Backend  │
+                    └────────┬─────────┘
+                             │
+             ┌───────────────┼────────────────┐
+             │               │                │
+             ▼               ▼                ▼
+      ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
+      │ PostgreSQL  │ │  LangChain  │ │   Masking   │
+      │             │ │    + LLM    │ │   Engine    │
+      └─────────────┘ └─────────────┘ └─────────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │ Masking Policies │
+                    └──────────────────┘
+```
 
 ---
 
 # 🧩 Technology Stack
 
-| Component | Technology |
-|---|---|
-| Programming Language | Python |
-| Database | PostgreSQL |
-| API Framework | Flask |
-| GenAI Orchestration | LangChain |
-| LLM | Configurable |
-| Database Driver | PostgreSQL Python Driver |
-| Frontend | Web UI |
-| Environment | Python Virtual Environment |
-| Dependency Management | `requirements.txt` |
-| Version Control | Git / GitHub |
+| Component       | Technology                  |
+| --------------- | --------------------------- |
+| Language        | Python                      |
+| Backend API     | FastAPI                     |
+| Database        | PostgreSQL                  |
+| GenAI Framework | LangChain                   |
+| LLM             | Configurable LLM Provider   |
+| Data Validation | Pydantic                    |
+| Frontend        | Lightweight Admin Dashboard |
+| Testing         | pytest                      |
+| Environment     | Python Virtual Environment  |
+| Version Control | Git / GitHub                |
+| Development     | Cursor                      |
 
 ---
 
 # 📁 Project Structure
 
+The project is intentionally separated into clear components.
+
 ```text
 MaskGate/
 │
-├── app/
-│   ├── __init__.py
-│   │
-│   ├── config.py
-│   │
-│   ├── database/
-│   │   ├── base.py
-│   │   └── postgresql.py
-│   │
-│   ├── ai/
-│   │   ├── schema_analyzer.py
-│   │   ├── masking_recommender.py
-│   │   └── runtime_detector.py
-│   │
-│   ├── masking/
-│   │   ├── engine.py
-│   │   ├── policies.py
-│   │   └── strategies.py
-│   │
-│   └── routes/
-│       ├── schema.py
-│       ├── masking.py
-│       └── query.py
+├── AGENTS.md
+├── README.md
+├── requirements.txt
+├── .env.example
+├── .gitignore
+│
+├── backend/
+│   └── app/
+│       ├── main.py
+│       │
+│       ├── api/
+│       │   └── routes/
+│       │       ├── health.py
+│       │       ├── schema.py
+│       │       ├── masking.py
+│       │       └── query.py
+│       │
+│       ├── config/
+│       │   └── settings.py
+│       │
+│       ├── database/
+│       │   ├── base.py
+│       │   ├── connection.py
+│       │   └── postgresql.py
+│       │
+│       ├── schemas/
+│       │   ├── database.py
+│       │   ├── masking.py
+│       │   └── query.py
+│       │
+│       ├── services/
+│       │   ├── schema_service.py
+│       │   ├── masking_service.py
+│       │   └── query_service.py
+│       │
+│       ├── ai/
+│       │   ├── llm.py
+│       │   ├── schema_analyzer.py
+│       │   └── sensitive_data_detector.py
+│       │
+│       └── masking/
+│           ├── engine.py
+│           ├── policies.py
+│           └── strategies.py
+│
+├── frontend/
+│
+├── database/
+│   ├── schema.sql
+│   ├── seed.sql
+│   └── README.md
 │
 ├── tests/
 │   ├── test_database.py
+│   ├── test_schema.py
 │   ├── test_masking.py
 │   └── test_ai.py
 │
 ├── docs/
-│   ├── architecture/
-│   ├── research/
-│   └── diagrams/
+│   ├── architecture.md
+│   ├── masking.md
+│   └── future-roadmap.md
 │
-├── .env
-├── .gitignore
-├── requirements.txt
-├── README.md
-└── run.py
+└── scripts/
 ```
+
+The structure can grow as features are implemented. Unnecessary empty modules should not be created prematurely.
 
 ---
 
-# 🗄️ Database Support
+# 🗄️ Database
 
-## Current
+## Current Database
 
-MaskGate currently focuses on:
+MaskGate currently supports:
 
 ```text
 PostgreSQL
-    ✅ Implemented
+    ✅ Current MVP
 ```
 
-The database layer is designed around an abstraction so additional database connectors can be introduced later.
+The database layer is designed so that additional database connectors can be added in the future without redesigning the entire application.
+
+Conceptually:
 
 ```text
 DatabaseConnector
        │
-       ├── PostgreSQLConnector  ✅
-       │
-       ├── MySQLConnector       🔮
-       │
-       ├── MongoDBConnector     🔮
-       │
-       └── SQLServerConnector   🔮
+       └── PostgreSQLConnector   ← Current
+       
+Future:
+       ├── MySQLConnector
+       ├── MongoDBConnector
+       └── SQLServerConnector
 ```
 
-Only PostgreSQL is within the scope of the current prototype.
+Only PostgreSQL is implemented in the current project.
 
 ---
 
-# 🔮 Future Architecture
+# 🔌 API
 
-The current Python service is intentionally simplified for rapid development.
+The backend uses FastAPI.
 
-A future version could introduce a database proxy layer:
+Initial API endpoints include:
 
 ```text
-                    Developer
-                        │
-                        ▼
-                ┌───────────────┐
-                │ MaskGate Proxy│
-                └───────┬───────┘
-                        │
-                        ▼
-                ┌───────────────┐
-                │ Policy / AI   │
-                │ Masking Engine│
-                └───────┬───────┘
-                        │
-                        ▼
-                   PostgreSQL
+GET  /health
+
+GET  /api/v1/schema
+
+GET  /api/v1/schema/tables
+
+POST /api/v1/schema/analyze
+
+GET  /api/v1/masking/policies
+
+POST /api/v1/masking/policies
+
+POST /api/v1/query
 ```
 
-Potential future extensions include:
-
-- Database proxy
-- TCP-based database communication
-- JDBC-style connectivity
-- VS Code integration
-- Role-Based Access Control
-- Additional database connectors
-- Enterprise deployment
-- Advanced audit logging
-
-These components are **outside the current MVP scope**.
+FastAPI's interactive API documentation can be used during development to test the endpoints.
 
 ---
 
-# 📊 Current Development Scope
+# 🔒 Security Principles
 
-### MVP
+## Original Data Preservation
 
-- [x] PostgreSQL connection
-- [ ] Schema discovery
-- [ ] Table and column analysis
-- [ ] AI masking recommendations
-- [ ] Administrator review
-- [ ] Masking policy storage
-- [ ] Rule-based dynamic masking
-- [ ] Runtime sensitive-data detection
-- [ ] Flask API
-- [ ] Basic web UI
-- [ ] Testing
-- [ ] Documentation
+MaskGate does not modify the original database records during masking.
 
-### Future
+## Least Data Exposure
 
-- [ ] Database Proxy
-- [ ] TCP Socket Communication
-- [ ] JDBC Connectivity
-- [ ] VS Code Integration
-- [ ] Role-Based Access Control
-- [ ] MySQL Support
-- [ ] MongoDB Support
-- [ ] SQL Server Support
-- [ ] Advanced Audit Logging
+Only information necessary for the task should be exposed to developers.
+
+## Human Approval
+
+AI-generated masking recommendations should be reviewed before becoming active policies.
+
+## Defense in Depth
+
+MaskGate combines:
+
+```text
+Approved Masking Policies
+          +
+Deterministic Masking
+          +
+Runtime GenAI Detection
+```
+
+## Secret Protection
+
+Database credentials and LLM API keys must never be hard-coded.
+
+Use environment variables instead.
+
+---
+
+# ⚠️ LLM Security
+
+The LLM should not be treated as a trusted database administrator.
+
+The LLM must NOT:
+
+* Execute arbitrary SQL.
+* Modify database records.
+* Modify database schemas.
+* Disable masking.
+* Bypass application policies.
+
+The application controls database access and validates LLM-generated outputs before using them.
+
+Where possible, schema metadata should be sent to the LLM instead of unnecessary real database records.
+
+---
+
+# 🧪 Example Dataset
+
+For demonstration and testing, MaskGate can use a synthetic healthcare-style dataset.
+
+Example tables:
+
+```text
+patients
+├── patient_id
+├── full_name
+├── date_of_birth
+├── blood_group
+├── phone
+├── email
+├── address
+└── emergency_contact
+
+medical_records
+├── record_id
+├── patient_id
+├── diagnosis
+├── medication
+├── allergies
+├── notes
+└── visit_date
+
+appointments
+├── appointment_id
+├── patient_id
+├── doctor_name
+├── appointment_date
+└── status
+```
+
+**Only synthetic/fake data should be used for development and demonstrations.**
 
 ---
 
@@ -563,11 +534,10 @@ These components are **outside the current MVP scope**.
 
 ## Requirements
 
-- macOS / Linux / Windows
-- Python 3.x
-- PostgreSQL
-- Git
-- VS Code
+* Python 3.x
+* PostgreSQL
+* Git
+* Cursor or another code editor
 
 ---
 
@@ -580,15 +550,13 @@ cd MaskGate
 
 ---
 
-## 2. Create a Python Virtual Environment
+## 2. Create Virtual Environment
 
 ```bash
 python3 -m venv .venv
 ```
 
 Activate it:
-
-### macOS / Linux
 
 ```bash
 source .venv/bin/activate
@@ -606,7 +574,9 @@ pip install -r requirements.txt
 
 ## 4. Configure Environment Variables
 
-Create a `.env` file:
+Create `.env` locally using `.env.example` as the template.
+
+Example:
 
 ```env
 DATABASE_HOST=localhost
@@ -618,152 +588,258 @@ DATABASE_PASSWORD=your_password
 LLM_API_KEY=your_api_key
 ```
 
-**Never commit `.env` or API keys to GitHub.**
+Never commit `.env` to GitHub.
 
 ---
 
-## 5. Run the Application
+## 5. Start the FastAPI Application
+
+The exact development command depends on the project entry point.
+
+Typical development command:
 
 ```bash
-python run.py
+uvicorn backend.app.main:app --reload
 ```
 
-The API will be available locally.
+---
+
+## 6. Test the API
+
+Open the FastAPI documentation:
+
+```text
+/docs
+```
+
+The first milestone is:
+
+```text
+PostgreSQL
+    ↓
+Python
+    ↓
+FastAPI
+    ↓
+API
+    ↓
+Schema JSON
+```
 
 ---
 
 # 🧪 Testing
 
-Run the test suite using:
+Run:
 
 ```bash
 pytest
 ```
 
-Testing will cover:
+Tests will cover areas such as:
 
-- PostgreSQL connectivity
-- Schema extraction
-- Masking strategies
-- Masking policies
-- AI recommendations
-- Runtime sensitive-data detection
-- API endpoints
+* PostgreSQL connectivity
+* Schema extraction
+* API responses
+* Masking strategies
+* Masking policies
+* LLM output validation
+* Runtime sensitive-data detection
 
 ---
 
-# 🔒 Security Principles
+# 📅 Development Roadmap
 
-MaskGate follows several important principles:
+## Phase 1 — Foundation
 
-### Original Data Preservation
+* [ ] Repository structure
+* [ ] AGENTS.md
+* [ ] Python environment
+* [ ] PostgreSQL connection
+* [ ] Configuration management
 
-Masking does not modify the original database records.
+## Phase 2 — PostgreSQL + FastAPI
 
-### Least Exposure
+* [ ] Schema discovery
+* [ ] Table discovery
+* [ ] Column discovery
+* [ ] FastAPI endpoints
+* [ ] API testing
 
-Developers should receive only the information necessary for debugging.
+## Phase 3 — Admin Dashboard
 
-### Human Approval
+* [ ] Connect frontend to API
+* [ ] Display schemas
+* [ ] Display tables
+* [ ] Display columns
+* [ ] Display database relationships
 
-AI-generated masking policies should be reviewed by an administrator before becoming active.
+## Phase 4 — GenAI
 
-### Defense in Depth
+* [ ] LangChain integration
+* [ ] LLM configuration
+* [ ] Schema analysis
+* [ ] Sensitive-field recommendations
+* [ ] Structured LLM output
+* [ ] Recommendation validation
 
-MaskGate combines:
+## Phase 5 — Masking Policies
+
+* [ ] Admin review
+* [ ] Policy creation
+* [ ] Policy storage
+* [ ] Masking strategies
+* [ ] Deterministic masking
+
+## Phase 6 — Runtime Protection
+
+* [ ] Controlled query processing
+* [ ] Apply approved masking policies
+* [ ] Runtime sensitive-data detection
+* [ ] Additional masking
+* [ ] Final protected response
+
+## Phase 7 — Testing & Demonstration
+
+* [ ] Unit tests
+* [ ] Integration tests
+* [ ] API testing
+* [ ] End-to-end demonstration
+* [ ] Documentation
+* [ ] Architecture diagrams
+
+---
+
+# 🔮 Future Work
+
+The current MVP intentionally does **not** implement the following.
+
+## Database Proxy
+
+A future version could introduce:
 
 ```text
-Manual / Approved Policies
-          +
-Rule-Based Masking
-          +
-GenAI Detection
+Developer
+    │
+    ▼
+MaskGate Proxy
+    │
+    ▼
+Masking / Policy Engine
+    │
+    ▼
+PostgreSQL
 ```
 
-### API Key Protection
-
-Secrets and API keys must be stored outside source code and excluded from Git.
+This could provide a transparent database access layer without requiring developers to change their existing database workflow.
 
 ---
 
-# ⚠️ Limitations
+## TCP Database Communication
 
-The current prototype has several limitations:
-
-- PostgreSQL is the only supported database.
-- LLM-based detection is not guaranteed to identify every sensitive value.
-- AI recommendations require human review.
-- The prototype is not intended to replace a complete enterprise GDPR compliance system.
-- Production deployment requires additional security controls.
-- The current implementation does not provide a database proxy.
+Future versions may investigate TCP/database-protocol-level communication for a transparent proxy architecture.
 
 ---
 
-# 📅 Development Timeline
+## JDBC Connectivity
 
-**Project Deadline: 29 August 2026**
-
-### Phase 1 — Foundation
-
-- PostgreSQL integration
-- Schema discovery
-- Python application
-- LangChain + LLM integration
-
-### Phase 2 — Masking
-
-- AI masking recommendations
-- Policy creation
-- Dynamic masking
-- Runtime sensitive-data detection
-
-### Phase 3 — Application
-
-- Flask API
-- Basic UI
-- Testing
-- Documentation
-- Demonstration
+JDBC-style connectivity may be investigated in future versions to support applications that connect through JDBC-compatible database interfaces.
 
 ---
 
-# 🎓 Research Direction
+## VS Code Integration
 
-MaskGate investigates the following question:
+A future version could integrate MaskGate with developer tools such as VS Code.
 
-> **How can Generative AI assist in identifying and dynamically masking sensitive information in database systems while preserving the usefulness of data for software development and debugging?**
+---
 
-The project explores the balance between:
+## Role-Based Access Control
+
+RBAC could later provide different capabilities for:
 
 ```text
-Developer Debugging Utility
-            ↕
-       Data Privacy
-            ↕
-     Security Controls
-            ↕
-       GenAI Assistance
+Administrator
+Developer
+Auditor
+Other Roles
 ```
 
 ---
 
-# 🤝 Contributors
+## Additional Databases
 
-- **Faizam Fairooz** — Project Developer
-- **Supervisor:** *Arnaldo Pasangha*
-- **Co-Supervisor:** *Venura Pesanjith*
+Future connectors may support:
+
+```text
+PostgreSQL     ← Current
+MySQL          ← Future
+MongoDB        ← Future
+SQL Server     ← Future
+```
+
 ---
 
-# 📄 Project Status
+## Enterprise Features
 
-> 🚧 **Research / Prototype — In Development**
+Potential future work includes:
 
-MaskGate is currently being developed as a research prototype focused on GenAI-assisted dynamic data masking for PostgreSQL.
+* Advanced auditing
+* Authentication
+* Authorization
+* Enterprise deployment
+* Centralized policy management
+* Additional database integrations
+
+These features are outside the current MVP.
+
+---
+
+# 📚 Research Focus
+
+MaskGate investigates the combination of:
+
+```text
+Database Metadata
+       +
+Generative AI
+       +
+Human Policy Review
+       +
+Deterministic Masking
+       +
+Runtime Sensitive Data Detection
+```
+
+The central research direction is:
+
+> **Using Generative AI as an intelligent assistance layer for identifying and protecting sensitive database information while preserving the usefulness of data for software development and debugging.**
+
+---
+
+# 📊 Project Status
+
+```text
+🚧 Research Prototype
+```
+
+MaskGate is currently under active development as an academic research project.
+
+The current implementation prioritizes a working PostgreSQL + FastAPI + GenAI masking workflow over a complex production infrastructure.
+
+---
+
+# 👨‍💻 Author
+
+**Faizam Fairooz**
+
+GitHub:
+
+https://github.com/faizamfairooz/MaskGate
 
 ---
 
 # 📜 License
 
-This project is currently under academic development.
+This project is currently being developed as an academic research prototype.
 
 License terms will be determined before public release.
