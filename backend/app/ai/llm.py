@@ -1,7 +1,11 @@
 import json
 from typing import List, Optional
 
-from app.ai.llm_schemas import ColumnRecommendation, SchemaAnalysisLLMResult
+from app.ai.llm_schemas import (
+    ColumnRecommendation,
+    SchemaAnalysisLLMResult,
+    RuntimeDetectionResult,
+)
 from app.config.settings import settings
 
 
@@ -12,6 +16,8 @@ class LLMClient:
         self._llm = None
         self.model = settings.LLM_MODEL
         self.temperature = settings.LLM_TEMPERATURE
+        
+        # Try OpenAI first
         if settings.OPENAI_API_KEY:
             try:
                 from langchain_openai import ChatOpenAI
@@ -20,6 +26,19 @@ class LLMClient:
                     model=self.model,
                     temperature=self.temperature,
                     api_key=settings.OPENAI_API_KEY,
+                )
+            except Exception:
+                self._llm = None
+        
+        # Fallback to Google AI Studio
+        if self._llm is None and settings.GOOGLE_API_KEY:
+            try:
+                from langchain_google_genai import ChatGoogleGenerativeAI
+
+                self._llm = ChatGoogleGenerativeAI(
+                    model="gemini-pro",
+                    temperature=self.temperature,
+                    api_key=settings.GOOGLE_API_KEY,
                 )
             except Exception:
                 self._llm = None
@@ -92,6 +111,100 @@ Do not invent specific values. Keep under 120 words.
                     for part in content
                 )
             return str(content)
+        except Exception:
+            return None
+
+    def detect_runtime_sensitive_data(
+        self,
+        data: List[List[Any]],
+        columns: List[str],
+        already_masked_columns: List[str],
+    ) -> Optional[RuntimeDetectionResult]:
+        """
+        Detect sensitive data in query results using LLM analysis.
+        This is a secondary safety layer after deterministic masking.
+
+        Args:
+            data: Query result rows (already masked by deterministic policies)
+            columns: Column names
+            already_masked_columns: Columns already protected by policies
+
+        Returns:
+            Structured detection results or None if LLM unavailable
+        """
+        if not self.is_available() or not data:
+            return None
+
+        # Sample data to avoid sending too much to LLM
+        sample_size = min(10, len(data))
+        sample_data = data[:sample_size]
+
+        # Build data description (avoid sending full values)
+        data_description = "Columns: " + ", ".join(columns) + "\n"
+        data_description += "Already masked columns: " + ", ".join(already_masked_columns) + "\n"
+        data_description += "Sample data (already masked):\n"
+
+        for row_idx, row in enumerate(sample_data):
+            row_repr = []
+            for col_idx, value in enumerate(row):
+                # Truncate long values and avoid sending full sensitive content
+                value_str = str(value)
+                if len(value_str) > 50:
+                    value_str = value_str[:25] + "..." + value_str[-25:]
+                row_repr.append(f"{columns[col_idx]}={value_str}")
+            data_description += f"Row {row_idx}: " + ", ".join(row_repr) + "\n"
+
+        prompt = f"""You are a data privacy analyst. Analyze this query result data for sensitive information
+that may NOT have been covered by existing masking policies.
+
+IMPORTANT:
+- This is a SECONDARY detection layer - deterministic policies have already been applied
+- Focus on finding sensitive data in columns that are NOT already masked
+- Never suggest executing SQL or modifying data
+- Be conservative - if unsure, flag as potentially sensitive
+
+Look for:
+- Email addresses, phone numbers, SSNs, credit card numbers
+- Personal identifiers, addresses, names
+- Financial information, medical data
+- Any other PII or sensitive information
+
+{data_description}
+
+Return structured findings with:
+- row_index: the row number where sensitive data was found
+- column_name: the column containing sensitive data
+- sensitivity: low, medium, or high
+- data_type: type of sensitive data (email, phone, ssn, custom, etc.)
+- recommended_strategy: one of: redaction, partial_mask, email_mask, phone_mask, ssn_mask, credit_card_mask, hash
+- rationale: brief explanation
+- summary: overall summary
+- confidence: high, medium, or low
+
+If no sensitive data is found, set has_sensitive_data to false and provide an empty detections list."""
+
+        try:
+            structured = self._llm.with_structured_output(RuntimeDetectionResult)
+            result: RuntimeDetectionResult = structured.invoke(prompt)
+            return result
+        except Exception:
+            # Fallback: try parsing as JSON
+            return self._parse_runtime_detection_fallback(prompt)
+
+    def _parse_runtime_detection_fallback(
+        self, prompt: str
+    ) -> Optional[RuntimeDetectionResult]:
+        """Fallback parsing for runtime detection when structured output fails."""
+        try:
+            response = self._llm.invoke(prompt)
+            content = response.content if hasattr(response, "content") else str(response)
+            if isinstance(content, list):
+                content = "".join(
+                    part.get("text", "") if isinstance(part, dict) else str(part)
+                    for part in content
+                )
+            data = json.loads(content)
+            return RuntimeDetectionResult.model_validate(data)
         except Exception:
             return None
 

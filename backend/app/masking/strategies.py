@@ -233,6 +233,7 @@ class MaskingStrategyFactory:
 
     _strategies = {
         'redaction': RedactionStrategy(),
+        'redact': RedactionStrategy(),
         'partial_mask': PartialMaskStrategy(),
         'hash': HashStrategy(),
         'email_mask': EmailMaskStrategy(),

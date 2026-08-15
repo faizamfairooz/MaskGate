@@ -9,6 +9,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.api.routes import health
 from app.api.routes.schema import router as schema_router
+from app.api.routes.masking import router as masking_router
+from app.api.routes.query import router as query_router
 from app.config.settings import settings
 from app.database.connection import close_all_connections, initialize_connection_pool
 
@@ -34,6 +36,8 @@ app = FastAPI(
 
 app.include_router(health.router, prefix=f"{API_V1}/health", tags=["health"])
 app.include_router(schema_router, prefix=f"{API_V1}/schema", tags=["schema"])
+app.include_router(masking_router, prefix=f"{API_V1}/masking", tags=["masking"])
+app.include_router(query_router, prefix=f"{API_V1}/query", tags=["query"])
 
 
 @app.get("/")

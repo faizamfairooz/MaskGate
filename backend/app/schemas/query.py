@@ -20,6 +20,8 @@ class QueryResponse(BaseModel):
     masked_columns: List[str]
     query_hash: Optional[str] = None
     runtime_detection_summary: Optional[str] = None
+    llm_detection_enabled: bool = False
+    llm_detection_summary: Optional[str] = None
 
 
 class QueryHistory(BaseModel):

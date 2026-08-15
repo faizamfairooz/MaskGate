@@ -79,9 +79,10 @@ MaskGate is a comprehensive database security platform that provides AI-powered 
 
 ### AI Layer
 
-- **LLM Client**: OpenAI integration for advanced analysis
+- **LLM Client**: OpenAI and Google AI Studio integration for advanced analysis
 - **Schema Analyzer**: Pattern recognition in database schemas
 - **Sensitive Data Detector**: Real-time data classification
+- **Runtime Detection**: Secondary safety layer for query results
 - **Fallback**: Rule-based detection when LLM unavailable
 
 ### Masking Layer
@@ -116,9 +117,13 @@ MaskGate is a comprehensive database security platform that provides AI-powered 
 1. User submits SQL query in Query Editor
 2. API validates query for security
 3. QueryService executes query against database
-4. MaskingService applies applicable policies
-5. Results returned with masking information
-6. Query logged in history for audit
+4. MaskingService applies applicable deterministic policies
+5. **Runtime Sensitive Data Detection** (secondary safety layer):
+   - Pattern-based detection for columns not covered by policies
+   - LLM-based detection for additional sensitive data
+   - Deterministic masking applied based on detection results
+6. Results returned with masking information
+7. Query logged in history for audit
 
 ### Policy Management Flow
 

@@ -1,5 +1,6 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from app.ai.llm import llm_client
+from app.ai.llm_schemas import RuntimeDetectionResult
 import re
 
 
@@ -149,3 +150,47 @@ class SensitiveDataDetector:
                 recommendations.append(type_to_strategy[data_type])
 
         return recommendations if recommendations else ['redaction']
+
+    def detect_runtime_sensitive_data(
+        self,
+        data: List[List[Any]],
+        columns: List[str],
+        already_masked_columns: List[str],
+    ) -> Tuple[RuntimeDetectionResult, List[Tuple[int, int, str]]]:
+        """
+        Perform LLM-based runtime sensitive data detection.
+        This is a secondary safety layer after deterministic masking.
+
+        Args:
+            data: Query result rows (may already be partially masked)
+            columns: Column names
+            already_masked_columns: Columns already protected by policies
+
+        Returns:
+            Tuple of (LLM detection result, list of (row_idx, col_idx, strategy) to apply)
+        """
+        # Use LLM for structured detection
+        llm_result = llm_client.detect_runtime_sensitive_data(
+            data, columns, already_masked_columns
+        )
+
+        if not llm_result:
+            # Return empty result if LLM unavailable
+            empty_result = RuntimeDetectionResult(
+                has_sensitive_data=False,
+                detections=[],
+                summary="LLM detection unavailable - pattern matching only",
+                confidence="low"
+            )
+            return empty_result, []
+
+        # Convert LLM detections to actionable masking operations
+        masking_operations = []
+        for detection in llm_result.detections:
+            if detection.column_name in columns:
+                col_idx = columns.index(detection.column_name)
+                masking_operations.append(
+                    (detection.row_index, col_idx, detection.recommended_strategy)
+                )
+
+        return llm_result, masking_operations

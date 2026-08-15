@@ -56,8 +56,13 @@ class QueryService:
         masked_columns: List[str] = []
         masked_data = rows
         runtime_summary = None
+        llm_detection_enabled = False
+        llm_detection_summary = None
 
         if apply_masking:
+            from app.ai.llm import llm_client
+            llm_detection_enabled = llm_client.is_available() and mask_suspicious
+
             masking_result = self.masking_service.apply_masking(
                 MaskingRequest(
                     table_name=self._extract_table_name(query),
@@ -69,6 +74,10 @@ class QueryService:
             masked_data = masking_result.masked_data
             masked_columns = masking_result.masked_columns
             runtime_summary = masking_result.runtime_detection_summary
+
+            # Extract LLM-specific summary if available
+            if runtime_summary and "LLM detection" in runtime_summary:
+                llm_detection_summary = runtime_summary
 
         execution_time = time.time() - start_time
         query_hash = self._generate_query_hash(query)
@@ -91,6 +100,8 @@ class QueryService:
             masked_columns=masked_columns,
             query_hash=query_hash,
             runtime_detection_summary=runtime_summary,
+            llm_detection_enabled=llm_detection_enabled,
+            llm_detection_summary=llm_detection_summary,
         )
 
     def validate_query(self, query: str) -> tuple[bool, str]:

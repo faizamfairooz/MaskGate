@@ -8,8 +8,15 @@ from typing import List
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from app.ai.llm import LLMClient
-from app.ai.llm_schemas import ColumnRecommendation, SchemaAnalysisLLMResult, SensitivityLevel
+from app.ai.llm_schemas import (
+    ColumnRecommendation,
+    SchemaAnalysisLLMResult,
+    SensitivityLevel,
+    RuntimeDetectionResult,
+    SensitiveValueDetection,
+)
 from app.ai.schema_analyzer import SchemaAnalyzer
+from app.ai.sensitive_data_detector import SensitiveDataDetector
 from app.schemas.database import ColumnSchema
 
 
@@ -35,6 +42,22 @@ def sample_columns():
         ColumnSchema(column_name="address", data_type="text", is_nullable=True),
         ColumnSchema(column_name="name", data_type="character varying", is_nullable=False),
     ]
+
+
+@pytest.fixture
+def sample_query_data():
+    """Sample query result data for testing."""
+    return [
+        [1, "john@example.com", "555-1234", "123 Main St", "John Doe"],
+        [2, "jane@test.org", "555-5678", "456 Oak Ave", "Jane Smith"],
+        [3, "bob@company.net", "555-9012", "789 Pine Rd", "Bob Johnson"],
+    ]
+
+
+@pytest.fixture
+def sensitive_data_detector():
+    """Create sensitive data detector for testing."""
+    return SensitiveDataDetector()
 
 
 class TestLLMClient:
@@ -179,6 +202,294 @@ class TestLLMClient:
         column_stats = [{"column": "email", "risk_score": 0.9}]
         result = llm_client.summarize_runtime_detection(column_stats)
         assert result is None
+
+    @patch('app.ai.llm.settings.OPENAI_API_KEY', 'test-key')
+    @patch('langchain_openai.ChatOpenAI')
+    def test_detect_runtime_sensitive_data_valid(self, mock_chat_openai, sample_query_data):
+        """Test runtime sensitive data detection with valid LLM response."""
+        mock_llm = Mock()
+        mock_chat_openai.return_value = mock_llm
+
+        # Mock structured output
+        mock_structured = Mock()
+        mock_result = RuntimeDetectionResult(
+            has_sensitive_data=True,
+            detections=[
+                SensitiveValueDetection(
+                    row_index=0,
+                    column_name="email",
+                    sensitivity=SensitivityLevel.HIGH,
+                    data_type="email",
+                    recommended_strategy="email_mask",
+                    rationale="Email address detected"
+                ),
+                SensitiveValueDetection(
+                    row_index=1,
+                    column_name="phone",
+                    sensitivity=SensitivityLevel.HIGH,
+                    data_type="phone",
+                    recommended_strategy="phone_mask",
+                    rationale="Phone number detected"
+                )
+            ],
+            summary="Detected email and phone data",
+            confidence="high"
+        )
+        mock_structured.invoke.return_value = mock_result
+        mock_llm.with_structured_output.return_value = mock_structured
+
+        client = LLMClient()
+        columns = ["id", "email", "phone", "address", "name"]
+        result = client.detect_runtime_sensitive_data(sample_query_data, columns, [])
+
+        assert result is not None
+        assert result.has_sensitive_data is True
+        assert len(result.detections) == 2
+        assert result.detections[0].column_name == "email"
+        assert result.detections[0].recommended_strategy == "email_mask"
+        assert result.confidence == "high"
+
+    @patch('app.ai.llm.settings.OPENAI_API_KEY', 'test-key')
+    @patch('langchain_openai.ChatOpenAI')
+    def test_detect_runtime_sensitive_data_no_sensitive_data(self, mock_chat_openai, sample_query_data):
+        """Test runtime detection when no sensitive data is found."""
+        mock_llm = Mock()
+        mock_chat_openai.return_value = mock_llm
+
+        # Mock structured output with no detections
+        mock_structured = Mock()
+        mock_result = RuntimeDetectionResult(
+            has_sensitive_data=False,
+            detections=[],
+            summary="No sensitive data detected",
+            confidence="high"
+        )
+        mock_structured.invoke.return_value = mock_result
+        mock_llm.with_structured_output.return_value = mock_structured
+
+        client = LLMClient()
+        columns = ["id", "email", "phone", "address", "name"]
+        result = client.detect_runtime_sensitive_data(sample_query_data, columns, [])
+
+        assert result is not None
+        assert result.has_sensitive_data is False
+        assert len(result.detections) == 0
+
+    @patch('app.ai.llm.settings.OPENAI_API_KEY', 'test-key')
+    @patch('langchain_openai.ChatOpenAI')
+    def test_detect_runtime_sensitive_data_with_already_masked(self, mock_chat_openai, sample_query_data):
+        """Test runtime detection respects already masked columns."""
+        mock_llm = Mock()
+        mock_chat_openai.return_value = mock_llm
+
+        # Mock structured output - should only detect in non-masked columns
+        mock_structured = Mock()
+        mock_result = RuntimeDetectionResult(
+            has_sensitive_data=True,
+            detections=[
+                SensitiveValueDetection(
+                    row_index=0,
+                    column_name="address",  # Not in already_masked
+                    sensitivity=SensitivityLevel.MEDIUM,
+                    data_type="address",
+                    recommended_strategy="partial_mask",
+                    rationale="Address detected"
+                )
+            ],
+            summary="Detected address data",
+            confidence="medium"
+        )
+        mock_structured.invoke.return_value = mock_result
+        mock_llm.with_structured_output.return_value = mock_structured
+
+        client = LLMClient()
+        columns = ["id", "email", "phone", "address", "name"]
+        already_masked = ["email", "phone"]  # These should be ignored
+        result = client.detect_runtime_sensitive_data(sample_query_data, columns, already_masked)
+
+        assert result is not None
+        assert result.has_sensitive_data is True
+        # Should only detect address, not email or phone
+        assert all(d.column_name not in already_masked for d in result.detections)
+
+    @patch('app.ai.llm.settings.OPENAI_API_KEY', 'test-key')
+    @patch('langchain_openai.ChatOpenAI')
+    def test_detect_runtime_sensitive_data_fallback_parsing(self, mock_chat_openai, sample_query_data):
+        """Test fallback parsing when structured output fails."""
+        mock_llm = Mock()
+        mock_chat_openai.return_value = mock_llm
+
+        # Mock structured output to raise exception
+        mock_structured = Mock()
+        mock_structured.invoke.side_effect = Exception("Structured output failed")
+        mock_llm.with_structured_output.return_value = mock_structured
+
+        # Mock fallback to return valid JSON
+        mock_response = Mock()
+        mock_response.content = '{"has_sensitive_data": true, "detections": [{"row_index": 0, "column_name": "email", "sensitivity": "high", "data_type": "email", "recommended_strategy": "email_mask", "rationale": "Email detected"}], "summary": "Email found", "confidence": "high"}'
+        mock_llm.invoke.return_value = mock_response
+
+        client = LLMClient()
+        columns = ["id", "email", "phone", "address", "name"]
+        result = client.detect_runtime_sensitive_data(sample_query_data, columns, [])
+
+        assert result is not None
+        assert result.has_sensitive_data is True
+        assert len(result.detections) == 1
+
+    @patch('app.ai.llm.settings.OPENAI_API_KEY', None)
+    def test_detect_runtime_sensitive_data_no_llm(self, llm_client, sample_query_data):
+        """Test runtime detection returns None when LLM unavailable."""
+        columns = ["id", "email", "phone", "address", "name"]
+        result = llm_client.detect_runtime_sensitive_data(sample_query_data, columns, [])
+        assert result is None
+
+    @patch('app.ai.llm.settings.OPENAI_API_KEY', 'test-key')
+    @patch('langchain_openai.ChatOpenAI')
+    def test_detect_runtime_sensitive_data_empty_data(self, mock_chat_openai):
+        """Test runtime detection with empty data."""
+        client = LLMClient()
+        columns = ["id", "email"]
+        result = client.detect_runtime_sensitive_data([], columns, [])
+        assert result is None
+
+
+class TestSensitiveDataDetector:
+    """Test sensitive data detector functionality."""
+
+    def test_detector_creation(self, sensitive_data_detector):
+        """Test detector can be created."""
+        assert sensitive_data_detector is not None
+
+    def test_detect_sensitive_data_pattern_matching(self, sensitive_data_detector, sample_query_data):
+        """Test pattern-based sensitive data detection."""
+        columns = ["id", "email", "phone", "address", "name"]
+        result = sensitive_data_detector.detect_sensitive_data(sample_query_data, columns)
+
+        assert result is not None
+        assert result['total_rows'] == 3
+        assert 'column_risks' in result
+        assert 'high_risk_rows' in result
+
+    def test_detect_runtime_sensitive_data_with_llm(self, sensitive_data_detector, sample_query_data):
+        """Test runtime detection with LLM (mocked)."""
+        columns = ["id", "email", "phone", "address", "name"]
+        already_masked = ["email"]
+
+        with patch('app.ai.sensitive_data_detector.llm_client') as mock_llm:
+            # Mock LLM response
+            mock_result = RuntimeDetectionResult(
+                has_sensitive_data=True,
+                detections=[
+                    SensitiveValueDetection(
+                        row_index=0,
+                        column_name="phone",
+                        sensitivity=SensitivityLevel.HIGH,
+                        data_type="phone",
+                        recommended_strategy="phone_mask",
+                        rationale="Phone number detected"
+                    )
+                ],
+                summary="Phone detected",
+                confidence="high"
+            )
+            mock_llm.detect_runtime_sensitive_data.return_value = mock_result
+
+            llm_result, operations = sensitive_data_detector.detect_runtime_sensitive_data(
+                sample_query_data, columns, already_masked
+            )
+
+            assert llm_result is not None
+            assert llm_result.has_sensitive_data is True
+            assert len(operations) == 1
+            assert operations[0] == (0, 2, "phone_mask")  # row 0, col 2 (phone), phone_mask
+
+    def test_detect_runtime_sensitive_data_no_llm(self, sensitive_data_detector, sample_query_data):
+        """Test runtime detection when LLM is unavailable."""
+        columns = ["id", "email", "phone", "address", "name"]
+        already_masked = []
+
+        with patch('app.ai.sensitive_data_detector.llm_client') as mock_llm:
+            mock_llm.detect_runtime_sensitive_data.return_value = None
+
+            llm_result, operations = sensitive_data_detector.detect_runtime_sensitive_data(
+                sample_query_data, columns, already_masked
+            )
+
+            assert llm_result is not None
+            assert llm_result.has_sensitive_data is False
+            assert len(operations) == 0
+            assert "LLM detection unavailable" in llm_result.summary
+
+    def test_get_masking_recommendations(self, sensitive_data_detector):
+        """Test masking recommendations based on detected types."""
+        recommendations = sensitive_data_detector.get_masking_recommendations(
+            "email", ["email"]
+        )
+        assert "email_mask" in recommendations
+
+        recommendations = sensitive_data_detector.get_masking_recommendations(
+            "phone", ["phone"]
+        )
+        assert "phone_mask" in recommendations
+
+        recommendations = sensitive_data_detector.get_masking_recommendations(
+            "unknown", ["unknown"]
+        )
+        assert "redaction" in recommendations
+
+
+class TestRuntimeDetectionSchemas:
+    """Test Pydantic schemas for runtime detection."""
+
+    def test_sensitive_value_detection_valid(self):
+        """Test valid sensitive value detection."""
+        detection = SensitiveValueDetection(
+            row_index=0,
+            column_name="email",
+            sensitivity=SensitivityLevel.HIGH,
+            data_type="email",
+            recommended_strategy="email_mask",
+            rationale="Email is PII"
+        )
+        assert detection.row_index == 0
+        assert detection.column_name == "email"
+        assert detection.sensitivity == SensitivityLevel.HIGH
+        assert detection.data_type == "email"
+        assert detection.recommended_strategy == "email_mask"
+
+    def test_runtime_detection_result_valid(self):
+        """Test valid runtime detection result."""
+        result = RuntimeDetectionResult(
+            has_sensitive_data=True,
+            detections=[
+                SensitiveValueDetection(
+                    row_index=0,
+                    column_name="email",
+                    sensitivity=SensitivityLevel.HIGH,
+                    data_type="email",
+                    recommended_strategy="email_mask",
+                    rationale="Email is PII"
+                )
+            ],
+            summary="Email detected",
+            confidence="high"
+        )
+        assert result.has_sensitive_data is True
+        assert len(result.detections) == 1
+        assert result.summary == "Email detected"
+        assert result.confidence == "high"
+
+    def test_runtime_detection_result_no_sensitive_data(self):
+        """Test runtime detection result with no sensitive data."""
+        result = RuntimeDetectionResult(
+            has_sensitive_data=False,
+            detections=[],
+            summary="No sensitive data",
+            confidence="high"
+        )
+        assert result.has_sensitive_data is False
+        assert len(result.detections) == 0
 
 
 class TestLLMSchemas:

@@ -51,7 +51,14 @@ class MaskingEngine:
         policy_columns: Set[str],
         masked_columns: Set[str],
     ) -> Optional[str]:
+        """
+        Apply runtime sensitive data detection as a secondary safety layer.
+        First applies pattern matching, then uses LLM for deeper analysis.
+        """
         column_stats = []
+        already_masked = list(masked_columns)
+
+        # Phase 1: Pattern-based detection for columns not covered by policies
         for col_idx, column in enumerate(columns):
             if column in policy_columns:
                 continue
@@ -70,10 +77,51 @@ class MaskingEngine:
                         "column": column,
                         "detected_types": risks["detected_types"],
                         "risk_level": risks["risk_level"],
+                        "detection_method": "pattern_matching"
                     }
                 )
 
-        return llm_client.summarize_runtime_detection(column_stats)
+        # Phase 2: LLM-based detection for additional sensitive data
+        # This finds sensitive data that pattern matching missed
+        llm_result, llm_operations = self.detector.detect_runtime_sensitive_data(
+            masked_data, columns, already_masked
+        )
+
+        if llm_result and llm_operations:
+            for row_idx, col_idx, strategy_name in llm_operations:
+                column = columns[col_idx]
+                if column not in masked_columns:  # Don't re-mask already masked columns
+                    try:
+                        strategy = self.strategy_factory.get_strategy(strategy_name)
+                        masked_data[row_idx][col_idx] = strategy.mask(
+                            masked_data[row_idx][col_idx], {}
+                        )
+                        masked_columns.add(column)
+                        column_stats.append(
+                            {
+                                "column": column,
+                                "detected_types": ["llm_detected"],
+                                "risk_level": 2,  # LLM detections are treated as higher risk
+                                "detection_method": "llm_analysis"
+                            }
+                        )
+                    except ValueError:
+                        # Strategy not found, skip
+                        pass
+
+        # Generate summary
+        if llm_result:
+            summary_parts = []
+            if column_stats:
+                pattern_count = sum(1 for s in column_stats if s.get("detection_method") == "pattern_matching")
+                llm_count = sum(1 for s in column_stats if s.get("detection_method") == "llm_analysis")
+                summary_parts.append(f"Pattern matching: {pattern_count} columns")
+                summary_parts.append(f"LLM detection: {llm_count} columns")
+                summary_parts.append(f"LLM summary: {llm_result.summary}")
+                summary_parts.append(f"LLM confidence: {llm_result.confidence}")
+            return " | ".join(summary_parts)
+        else:
+            return llm_client.summarize_runtime_detection(column_stats)
 
     def apply_single_masking(self, value: Any, policy: MaskingPolicy) -> Any:
         strategy = self.strategy_factory.get_strategy(policy.strategy)

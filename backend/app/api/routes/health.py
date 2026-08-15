@@ -19,7 +19,7 @@ async def health_check():
 async def database_health():
     """Check database connection health."""
     try:
-        from backend.app.database.connection import get_database_connection, release_connection
+        from app.database.connection import get_database_connection, release_connection
 
         conn = get_database_connection()
         try:

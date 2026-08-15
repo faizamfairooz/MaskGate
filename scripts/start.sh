@@ -27,13 +27,15 @@ echo "📡 Starting backend server..."
 cd backend
 if [ -d "venv" ]; then
     source venv/bin/activate
-    python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 &
-    BACKEND_PID=$!
-    echo "✅ Backend server started on http://localhost:8000"
+elif [ -d "../venv" ]; then
+    source ../venv/bin/activate
 else
     echo "❌ Backend virtual environment not found. Please run ./scripts/setup.sh first"
     exit 1
 fi
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 &
+BACKEND_PID=$!
+echo "✅ Backend server started on http://localhost:8000"
 cd ..
 
 # Wait a moment for backend to start

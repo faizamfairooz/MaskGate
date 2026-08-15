@@ -83,44 +83,37 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Sample data tables for testing and demonstration
-CREATE TABLE IF NOT EXISTS customers (
-    id SERIAL PRIMARY KEY,
-    first_name VARCHAR(50) NOT NULL,
-    last_name VARCHAR(50) NOT NULL,
-    email VARCHAR(255) UNIQUE NOT NULL,
+-- Medical data tables for testing and demonstration
+CREATE TABLE IF NOT EXISTS patients (
+    patient_id SERIAL PRIMARY KEY,
+    full_name VARCHAR(100) NOT NULL,
+    date_of_birth DATE NOT NULL,
+    blood_group VARCHAR(5),
     phone VARCHAR(20),
-    ssn VARCHAR(11),
+    email VARCHAR(255) UNIQUE,
     address TEXT,
-    city VARCHAR(50),
-    state VARCHAR(2),
-    zip_code VARCHAR(10),
-    date_of_birth DATE,
+    emergency_contact VARCHAR(100),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS orders (
-    id SERIAL PRIMARY KEY,
-    customer_id INTEGER REFERENCES customers(id),
-    order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    total_amount DECIMAL(10, 2),
-    status VARCHAR(20),
-    shipping_address TEXT,
-    credit_card_number VARCHAR(20),
-    credit_card_expiry VARCHAR(5)
+CREATE TABLE IF NOT EXISTS medical_records (
+    record_id SERIAL PRIMARY KEY,
+    patient_id INTEGER NOT NULL REFERENCES patients(patient_id),
+    diagnosis TEXT NOT NULL,
+    medication TEXT,
+    allergies TEXT,
+    notes TEXT,
+    visit_date DATE NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS employees (
-    id SERIAL PRIMARY KEY,
-    first_name VARCHAR(50) NOT NULL,
-    last_name VARCHAR(50) NOT NULL,
-    email VARCHAR(255) UNIQUE NOT NULL,
-    phone VARCHAR(20),
-    ssn VARCHAR(11),
-    hire_date DATE,
-    salary DECIMAL(10, 2),
-    department VARCHAR(50),
-    address TEXT
+CREATE TABLE IF NOT EXISTS appointments (
+    appointment_id SERIAL PRIMARY KEY,
+    patient_id INTEGER NOT NULL REFERENCES patients(patient_id),
+    doctor_name VARCHAR(100) NOT NULL,
+    appointment_date TIMESTAMP NOT NULL,
+    status VARCHAR(20) DEFAULT 'scheduled',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Create indexes for better performance
@@ -130,8 +123,12 @@ CREATE INDEX IF NOT EXISTS idx_query_history_user ON query_history(user_id);
 CREATE INDEX IF NOT EXISTS idx_query_history_date ON query_history(executed_at);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(user_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_date ON audit_logs(created_at);
-CREATE INDEX IF NOT EXISTS idx_customers_email ON customers(email);
-CREATE INDEX IF NOT EXISTS idx_employees_email ON employees(email);
+CREATE INDEX IF NOT EXISTS idx_patients_email ON patients(email);
+CREATE INDEX IF NOT EXISTS idx_medical_records_patient ON medical_records(patient_id);
+CREATE INDEX IF NOT EXISTS idx_medical_records_date ON medical_records(visit_date);
+CREATE INDEX IF NOT EXISTS idx_appointments_patient ON appointments(patient_id);
+CREATE INDEX IF NOT EXISTS idx_appointments_date ON appointments(appointment_date);
+CREATE INDEX IF NOT EXISTS idx_appointments_status ON appointments(status);
 
 -- Create function to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -147,4 +144,7 @@ CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 CREATE TRIGGER update_masking_policies_updated_at BEFORE UPDATE ON masking_policies
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_masking_recommendations_updated_at BEFORE UPDATE ON masking_recommendations
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

@@ -25,7 +25,7 @@ def test_get_all_tables(schema_service):
     tables = schema_service.get_all_tables()
     assert isinstance(tables, list)
     # Should have sample tables from schema.sql
-    expected_tables = {"customers", "orders", "employees"}
+    expected_tables = {"patients", "medical_records", "appointments"}
     assert expected_tables.issubset(set(tables))
 
 
@@ -45,43 +45,43 @@ def test_get_full_schema(schema_service):
 @pytest.mark.integration
 def test_get_table_schema(schema_service):
     """Test retrieving schema for a specific table."""
-    table_schema = schema_service.get_table_schema("customers")
+    table_schema = schema_service.get_table_schema("patients")
     assert isinstance(table_schema, TableSchema)
-    assert table_schema.table_name == "customers"
+    assert table_schema.table_name == "patients"
     assert len(table_schema.columns) > 0
     
     # Check for expected columns
     column_names = {col.column_name for col in table_schema.columns}
-    assert "id" in column_names
+    assert "patient_id" in column_names
     assert "email" in column_names
-    assert "first_name" in column_names
+    assert "full_name" in column_names
 
 
 @pytest.mark.integration
 def test_table_schema_with_primary_key(schema_service):
     """Test that primary key information is included."""
-    table_schema = schema_service.get_table_schema("customers")
-    assert "id" in table_schema.primary_keys
+    table_schema = schema_service.get_table_schema("patients")
+    assert "patient_id" in table_schema.primary_keys
     
-    # Check that id column is marked as primary key
-    id_column = next(col for col in table_schema.columns if col.column_name == "id")
+    # Check that patient_id column is marked as primary key
+    id_column = next(col for col in table_schema.columns if col.column_name == "patient_id")
     assert id_column.is_primary_key is True
 
 
 @pytest.mark.integration
 def test_table_schema_with_foreign_keys(schema_service):
     """Test that foreign key information is included."""
-    table_schema = schema_service.get_table_schema("orders")
+    table_schema = schema_service.get_table_schema("medical_records")
     assert len(table_schema.foreign_keys) > 0
     
-    # Check for user_id foreign key
-    user_fk = next(
-        (fk for fk in table_schema.foreign_keys if fk.column_name == "user_id"),
+    # Check for patient_id foreign key
+    patient_fk = next(
+        (fk for fk in table_schema.foreign_keys if fk.column_name == "patient_id"),
         None
     )
-    assert user_fk is not None
-    assert user_fk.foreign_table_name == "users"
-    assert user_fk.foreign_column_name == "id"
+    assert patient_fk is not None
+    assert patient_fk.foreign_table_name == "patients"
+    assert patient_fk.foreign_column_name == "patient_id"
 
 
 @pytest.mark.integration
@@ -94,13 +94,13 @@ def test_nonexistent_table(schema_service):
 @pytest.mark.integration
 def test_column_schema_types(schema_service):
     """Test that column data types are correctly captured."""
-    table_schema = schema_service.get_table_schema("customers")
+    table_schema = schema_service.get_table_schema("patients")
     
     # Find email column
     email_col = next(col for col in table_schema.columns if col.column_name == "email")
     assert email_col.data_type == "character varying"
-    assert email_col.is_nullable is False
+    assert email_col.is_nullable is True
     
-    # Find phone column (nullable)
-    phone_col = next(col for col in table_schema.columns if col.column_name == "phone")
-    assert phone_col.is_nullable is True
+    # Find full_name column (not nullable)
+    name_col = next(col for col in table_schema.columns if col.column_name == "full_name")
+    assert name_col.is_nullable is False

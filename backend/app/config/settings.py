@@ -19,6 +19,7 @@ class Settings(BaseSettings):
 
     # AI/LLM Configuration
     OPENAI_API_KEY: Optional[str] = None
+    GOOGLE_API_KEY: Optional[str] = None  # Google AI Studio API key
     LLM_MODEL: str = "gpt-4"
     LLM_TEMPERATURE: float = 0.3
 
