@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { queryAPI } from '../services/api'
 
 function QueryEditor() {
-  const [query, setQuery] = useState('SELECT * FROM customers LIMIT 5')
+  const [query, setQuery] = useState('SELECT * FROM patients LIMIT 5')
   const [results, setResults] = useState(null)
   const [loading, setLoading] = useState(false)
   const [applyMasking, setApplyMasking] = useState(true)

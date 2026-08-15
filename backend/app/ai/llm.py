@@ -17,8 +17,8 @@ class LLMClient:
         self.model = settings.LLM_MODEL
         self.temperature = settings.LLM_TEMPERATURE
         
-        # Try OpenAI first
-        if settings.OPENAI_API_KEY:
+        # Try OpenAI first if a real key is provided
+        if settings.OPENAI_API_KEY and not settings.OPENAI_API_KEY.startswith("your_"):
             try:
                 from langchain_openai import ChatOpenAI
 
@@ -30,18 +30,22 @@ class LLMClient:
             except Exception:
                 self._llm = None
         
-        # Fallback to Google AI Studio
-        if self._llm is None and settings.GOOGLE_API_KEY:
+        # Fallback to Google AI Studio (Gemini)
+        if self._llm is None and settings.GOOGLE_API_KEY and not settings.GOOGLE_API_KEY.startswith("your_"):
             try:
                 from langchain_google_genai import ChatGoogleGenerativeAI
 
                 self._llm = ChatGoogleGenerativeAI(
-                    model="gemini-pro",
+                    model="gemini-3.5-flash",
                     temperature=self.temperature,
-                    api_key=settings.GOOGLE_API_KEY,
+                    google_api_key=settings.GOOGLE_API_KEY,
                 )
+                self._is_google = True
             except Exception:
                 self._llm = None
+                self._is_google = False
+        else:
+            self._is_google = False
 
     def is_available(self) -> bool:
         return self._llm is not None
@@ -64,10 +68,25 @@ Table: {table_name}
 Columns:
 {schema_lines}
 
-Use recommended_strategy from: redaction, partial_mask, hash, email_mask, phone_mask,
-ssn_mask, credit_card_mask, date_mask, generalization.
+Use recommended_strategy from: redaction, partial_mask, hash, email_mask, phone_mask, ssn_mask, credit_card_mask, date_mask, generalization.
 Use sensitivity: low, medium, or high.
-Only include columns that need masking."""
+Only include columns that need masking.
+
+Output JSON in this format:
+{{
+  "table_name": "{table_name}",
+  "recommendations": [
+    {{
+      "column": "column_name",
+      "sensitivity": "high",
+      "recommended_strategy": "email_mask",
+      "rationale": "reason"
+    }}
+  ]
+}}"""
+
+        if getattr(self, "_is_google", False):
+            return self._parse_fallback(prompt, table_name)
 
         try:
             structured = self._llm.with_structured_output(SchemaAnalysisLLMResult)
@@ -76,6 +95,15 @@ Only include columns that need masking."""
             return result
         except Exception:
             return self._parse_fallback(prompt, table_name)
+
+    @staticmethod
+    def _extract_json_text(content: str) -> str:
+        text = content.strip()
+        if "```json" in text:
+            text = text.split("```json", 1)[1].split("```", 1)[0].strip()
+        elif "```" in text:
+            text = text.split("```", 1)[1].split("```", 1)[0].strip()
+        return text
 
     def _parse_fallback(self, prompt: str, table_name: str) -> Optional[SchemaAnalysisLLMResult]:
         try:
@@ -86,8 +114,11 @@ Only include columns that need masking."""
                     part.get("text", "") if isinstance(part, dict) else str(part)
                     for part in content
                 )
-            data = json.loads(content)
-            return SchemaAnalysisLLMResult.model_validate(data)
+            clean_json = self._extract_json_text(content)
+            data = json.loads(clean_json)
+            result = SchemaAnalysisLLMResult.model_validate(data)
+            result.table_name = table_name
+            return result
         except Exception:
             return None
 
@@ -183,6 +214,9 @@ Return structured findings with:
 
 If no sensitive data is found, set has_sensitive_data to false and provide an empty detections list."""
 
+        if getattr(self, "_is_google", False):
+            return self._parse_runtime_detection_fallback(prompt)
+
         try:
             structured = self._llm.with_structured_output(RuntimeDetectionResult)
             result: RuntimeDetectionResult = structured.invoke(prompt)
@@ -203,7 +237,8 @@ If no sensitive data is found, set has_sensitive_data to false and provide an em
                     part.get("text", "") if isinstance(part, dict) else str(part)
                     for part in content
                 )
-            data = json.loads(content)
+            clean_json = self._extract_json_text(content)
+            data = json.loads(clean_json)
             return RuntimeDetectionResult.model_validate(data)
         except Exception:
             return None

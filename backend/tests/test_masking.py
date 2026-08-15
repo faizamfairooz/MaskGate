@@ -215,3 +215,130 @@ def test_validate_query_with_cte():
     svc = QueryService()
     ok, _ = svc.validate_query("WITH cte AS (SELECT 1) SELECT * FROM cte")
     assert ok is True
+
+
+def test_masking_engine_apply_policies_to_query_results():
+    from app.masking.engine import MaskingEngine
+    engine = MaskingEngine()
+    data = [
+        [1, "john.smith@gmail.com", "0771234567", "secret123"],
+        [2, "alice.wonder@corp.org", "0719876543", "password456"],
+    ]
+    columns = ["id", "email", "phone", "notes"]
+    policies = [
+        MaskingPolicy(
+            name="users.email",
+            description="Mask email",
+            table_name="users",
+            column_name="email",
+            strategy="email_mask",
+        ),
+        MaskingPolicy(
+            name="users.phone",
+            description="Mask phone",
+            table_name="users",
+            column_name="phone",
+            strategy="phone_mask",
+        ),
+        MaskingPolicy(
+            name="users.notes",
+            description="Redact notes",
+            table_name="users",
+            column_name="notes",
+            strategy="redaction",
+        ),
+    ]
+
+    masked_data, masked_cols, _ = engine.apply_masking(data, columns, policies)
+
+    assert masked_data[0][0] == 1
+    assert masked_data[0][1] == "j***@gmail.com"
+    assert masked_data[0][2] == "******4567"
+    assert masked_data[0][3] == "*********"
+
+    assert masked_data[1][0] == 2
+    assert masked_data[1][1] == "a***@corp.org"
+    assert masked_data[1][2] == "******6543"
+    assert masked_data[1][3] == "***********"
+
+    assert set(masked_cols) == {"email", "phone", "notes"}
+
+
+def test_masking_engine_does_not_modify_original_records():
+    from app.masking.engine import MaskingEngine
+    engine = MaskingEngine()
+    original_row = [1, "john.smith@gmail.com", "0771234567"]
+    data = [original_row]
+    columns = ["id", "email", "phone"]
+    policies = [
+        MaskingPolicy(
+            name="users.email",
+            description="Mask email",
+            table_name="users",
+            column_name="email",
+            strategy="email_mask",
+        )
+    ]
+
+    masked_data, _, _ = engine.apply_masking(data, columns, policies)
+
+    # Verify original input list and inner elements were not mutated
+    assert original_row[1] == "john.smith@gmail.com"
+    assert masked_data[0][1] == "j***@gmail.com"
+
+
+def test_masking_engine_missing_or_unknown_policy_columns():
+    from app.masking.engine import MaskingEngine
+    engine = MaskingEngine()
+    data = [[1, "active_user"]]
+    columns = ["id", "username"]
+    policies = [
+        MaskingPolicy(
+            name="users.nonexistent",
+            description="Policy on non-existent column",
+            table_name="users",
+            column_name="nonexistent_column",
+            strategy="redaction",
+        )
+    ]
+
+    masked_data, masked_cols, _ = engine.apply_masking(data, columns, policies)
+
+    # Should safely ignore policies for columns not present in the dataset
+    assert masked_data == [[1, "active_user"]]
+    assert masked_cols == []
+
+
+def test_masking_engine_null_values_in_dataset():
+    from app.masking.engine import MaskingEngine
+    engine = MaskingEngine()
+    data = [
+        [1, None, None],
+        [2, "test@example.com", "0771234567"],
+    ]
+    columns = ["id", "email", "phone"]
+    policies = [
+        MaskingPolicy(
+            name="users.email",
+            description="Mask email",
+            table_name="users",
+            column_name="email",
+            strategy="email_mask",
+        ),
+        MaskingPolicy(
+            name="users.phone",
+            description="Mask phone",
+            table_name="users",
+            column_name="phone",
+            strategy="phone_mask",
+        ),
+    ]
+
+    masked_data, masked_cols, _ = engine.apply_masking(data, columns, policies)
+
+    # Null values should remain None without raising errors
+    assert masked_data[0][1] is None
+    assert masked_data[0][2] is None
+    assert masked_data[1][1] == "t***@example.com"
+    assert masked_data[1][2] == "******4567"
+

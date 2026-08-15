@@ -7,6 +7,9 @@ from app.schemas.database import ColumnSchema, DatabaseSchema, TableSchema, Fore
 class SchemaService:
     """Service for database schema operations."""
 
+    def get_schemas(self) -> List[str]:
+        return db.get_schemas()
+
     def get_all_tables(self, schema: str = "public") -> List[str]:
         return db.get_tables(schema=schema, exclude_metadata=True)
 

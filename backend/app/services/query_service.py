@@ -59,7 +59,7 @@ class QueryService:
         llm_detection_enabled = False
         llm_detection_summary = None
 
-        if apply_masking:
+        if apply_masking or mask_suspicious:
             from app.ai.llm import llm_client
             llm_detection_enabled = llm_client.is_available() and mask_suspicious
 
@@ -68,6 +68,7 @@ class QueryService:
                     table_name=self._extract_table_name(query),
                     columns=columns,
                     data=rows,
+                    policy_ids=[] if not apply_masking else None,
                     auto_detect=mask_suspicious,
                 )
             )

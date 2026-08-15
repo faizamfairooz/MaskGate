@@ -91,7 +91,7 @@ class MaskingService:
     def apply_masking(self, request: MaskingRequest) -> MaskingResult:
         start_time = time.time()
 
-        if request.policy_ids:
+        if request.policy_ids is not None:
             policies = []
             for pid in request.policy_ids:
                 p = self.get_policy(pid)

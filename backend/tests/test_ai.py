@@ -70,7 +70,7 @@ class TestLLMClient:
 
     def test_llm_client_not_available_without_api_key(self):
         """Test LLM client is not available when no API key is configured."""
-        with patch('app.ai.llm.settings.OPENAI_API_KEY', None):
+        with patch('app.ai.llm.settings.OPENAI_API_KEY', None), patch('app.ai.llm.settings.GOOGLE_API_KEY', None):
             client = LLMClient()
             assert client.is_available() is False
 
@@ -171,11 +171,12 @@ class TestLLMClient:
         assert result.table_name == "users"
         assert len(result.recommendations) == 1
 
-    @patch('app.ai.llm.settings.OPENAI_API_KEY', None)
-    def test_analyze_schema_metadata_no_llm(self, llm_client):
+    def test_analyze_schema_metadata_no_llm(self):
         """Test schema analysis returns None when LLM is not available."""
+        client = LLMClient()
+        client._llm = None
         columns = [("email", "character varying")]
-        result = llm_client.analyze_schema_metadata("users", columns)
+        result = client.analyze_schema_metadata("users", columns)
         assert result is None
 
     @patch('app.ai.llm.settings.OPENAI_API_KEY', 'test-key')
@@ -196,11 +197,12 @@ class TestLLMClient:
         assert result is not None
         assert "privacy risks" in result.lower()
 
-    @patch('app.ai.llm.settings.OPENAI_API_KEY', None)
-    def test_summarize_runtime_detection_no_llm(self, llm_client):
+    def test_summarize_runtime_detection_no_llm(self):
         """Test runtime detection summary returns None when LLM unavailable."""
+        client = LLMClient()
+        client._llm = None
         column_stats = [{"column": "email", "risk_score": 0.9}]
-        result = llm_client.summarize_runtime_detection(column_stats)
+        result = client.summarize_runtime_detection(column_stats)
         assert result is None
 
     @patch('app.ai.llm.settings.OPENAI_API_KEY', 'test-key')
@@ -337,11 +339,12 @@ class TestLLMClient:
         assert result.has_sensitive_data is True
         assert len(result.detections) == 1
 
-    @patch('app.ai.llm.settings.OPENAI_API_KEY', None)
-    def test_detect_runtime_sensitive_data_no_llm(self, llm_client, sample_query_data):
+    def test_detect_runtime_sensitive_data_no_llm(self, sample_query_data):
         """Test runtime detection returns None when LLM unavailable."""
+        client = LLMClient()
+        client._llm = None
         columns = ["id", "email", "phone", "address", "name"]
-        result = llm_client.detect_runtime_sensitive_data(sample_query_data, columns, [])
+        result = client.detect_runtime_sensitive_data(sample_query_data, columns, [])
         assert result is None
 
     @patch('app.ai.llm.settings.OPENAI_API_KEY', 'test-key')

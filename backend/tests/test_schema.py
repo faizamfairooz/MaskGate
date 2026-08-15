@@ -9,14 +9,31 @@ from app.services.schema_service import SchemaService
 from app.schemas.database import ColumnSchema, TableSchema, DatabaseSchema
 
 
+from fastapi.testclient import TestClient
+from app.main import app
+
+
 @pytest.fixture
 def schema_service():
     return SchemaService()
 
 
+@pytest.fixture
+def client():
+    return TestClient(app)
+
+
 @pytest.mark.integration
 def test_schema_service_creation(schema_service):
     assert schema_service is not None
+
+
+@pytest.mark.integration
+def test_get_schemas(schema_service):
+    """Test retrieving list of schemas."""
+    schemas = schema_service.get_schemas()
+    assert isinstance(schemas, list)
+    assert "public" in schemas
 
 
 @pytest.mark.integration
@@ -104,3 +121,69 @@ def test_column_schema_types(schema_service):
     # Find full_name column (not nullable)
     name_col = next(col for col in table_schema.columns if col.column_name == "full_name")
     assert name_col.is_nullable is False
+
+
+@pytest.mark.integration
+def test_api_get_schemas(client):
+    """Test GET /api/v1/schema/schemas endpoint."""
+    response = client.get("/api/v1/schema/schemas")
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+    assert "public" in data
+
+
+@pytest.mark.integration
+def test_api_get_tables(client):
+    """Test GET /api/v1/schema/tables endpoint."""
+    response = client.get("/api/v1/schema/tables")
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+    assert "patients" in data
+
+
+@pytest.mark.integration
+def test_api_get_full_schema(client):
+    """Test GET /api/v1/schema endpoint."""
+    response = client.get("/api/v1/schema")
+    assert response.status_code == 200
+    data = response.json()
+    assert "tables" in data
+    assert len(data["tables"]) > 0
+    table_names = [t["table_name"] for t in data["tables"]]
+    assert "patients" in table_names
+
+
+@pytest.mark.integration
+def test_api_get_table_schema(client):
+    """Test GET /api/v1/schema/tables/{table_name} endpoint."""
+    response = client.get("/api/v1/schema/tables/patients")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["table_name"] == "patients"
+    assert "columns" in data
+    assert "primary_keys" in data
+    assert "foreign_keys" in data
+
+
+@pytest.mark.integration
+def test_api_get_table_schema_not_found(client):
+    """Test GET /api/v1/schema/tables/{table_name} with nonexistent table."""
+    response = client.get("/api/v1/schema/tables/nonexistent_table")
+    assert response.status_code == 404
+
+
+@pytest.mark.integration
+def test_api_analyze_schema_endpoint(client):
+    """Test POST /api/v1/schema/analyze endpoint."""
+    response = client.post("/api/v1/schema/analyze", json={"table_name": "patients"})
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+    assert len(data) > 0
+    # Check that recommendations have table_name and column_name
+    assert all(r["table_name"] == "patients" for r in data)
+    assert any(r["column_name"] == "email" for r in data)
+
+

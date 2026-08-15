@@ -15,6 +15,7 @@ export const healthAPI = {
 }
 
 export const schemaAPI = {
+  getSchemas: () => api.get('/schema/schemas'),
   getSchema: (schema = 'public') => api.get('/schema', { params: { schema } }),
   getTables: (schema = 'public') => api.get('/schema/tables', { params: { schema } }),
   getTableSchema: (tableName, schema = 'public') =>
