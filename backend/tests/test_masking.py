@@ -342,3 +342,25 @@ def test_masking_engine_null_values_in_dataset():
     assert masked_data[1][1] == "t***@example.com"
     assert masked_data[1][2] == "******4567"
 
+
+def test_policy_repository_create_and_recreate_sql():
+    from app.database.repositories import PolicyRepository
+    repo = PolicyRepository()
+    policy = MaskingPolicy(
+        name="Doctor Name Masking",
+        description="Masks doctor names",
+        table_name="appointments",
+        column_name="doctor_name",
+        strategy="partial_mask",
+    )
+
+    with patch("app.database.repositories.db.execute_query") as mock_query:
+        mock_query.return_value = [{"id": 10, "created_at": None, "updated_at": None}]
+        created = repo.create_policy(policy)
+        assert created.id == 10
+        assert mock_query.called
+        sql_called = mock_query.call_args[0][0]
+        assert "ON CONFLICT (table_name, column_name) DO UPDATE" in sql_called
+        assert "is_active = TRUE" in sql_called
+
+

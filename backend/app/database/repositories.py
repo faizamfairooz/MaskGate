@@ -12,8 +12,17 @@ class PolicyRepository:
     def create_policy(self, policy: MaskingPolicy) -> MaskingPolicy:
         query = """
             INSERT INTO masking_policies
-                (name, description, table_name, column_name, strategy, parameters, status, source)
-            VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s)
+                (name, description, table_name, column_name, strategy, parameters, status, source, is_active)
+            VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, TRUE)
+            ON CONFLICT (table_name, column_name) DO UPDATE
+            SET name = EXCLUDED.name,
+                description = EXCLUDED.description,
+                strategy = EXCLUDED.strategy,
+                parameters = EXCLUDED.parameters,
+                status = EXCLUDED.status,
+                source = EXCLUDED.source,
+                is_active = TRUE,
+                updated_at = CURRENT_TIMESTAMP
             RETURNING id, created_at, updated_at
         """
         params_json = json.dumps(policy.parameters or {})
