@@ -1,10 +1,18 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
+from fastapi.testclient import TestClient
+
+from app.main import app
 from app.masking.strategies import MaskingStrategyFactory
 from app.masking.policies import PolicyManager
 from app.schemas.masking import MaskingPolicy
 from app.services.query_service import QueryService
+
+
+@pytest.fixture
+def client():
+    return TestClient(app)
 
 
 @pytest.fixture
@@ -362,5 +370,113 @@ def test_policy_repository_create_and_recreate_sql():
         sql_called = mock_query.call_args[0][0]
         assert "ON CONFLICT (table_name, column_name) DO UPDATE" in sql_called
         assert "is_active = TRUE" in sql_called
+
+
+def test_masking_service_create_policy_valid():
+    from app.services.masking_service import MaskingService
+    svc = MaskingService()
+    policy = MaskingPolicy(
+        table_name="patients",
+        column_name="email",
+        strategy="EMAIL",
+        schema_name="public",
+    )
+    with patch.object(svc, "validate_table_and_column") as mock_val, \
+         patch.object(svc.policy_manager, "create_policy") as mock_create:
+        mock_create.return_value = MaskingPolicy(
+            id=15,
+            name="patients.email",
+            table_name="patients",
+            column_name="email",
+            strategy="EMAIL",
+            schema_name="public",
+            status="ACTIVE",
+            is_active=True,
+        )
+        created = svc.create_policy(policy)
+        assert created.id == 15
+        assert created.table_name == "patients"
+        assert created.column_name == "email"
+        mock_val.assert_called_once_with("patients", "email", schema_name="public")
+        mock_create.assert_called_once()
+
+
+def test_masking_service_create_policy_invalid_table():
+    from app.services.masking_service import MaskingService
+    svc = MaskingService()
+    policy = MaskingPolicy(
+        table_name="nonexistent_tbl",
+        column_name="some_col",
+        strategy="REDACT",
+    )
+    with patch("app.services.masking_service.db.table_exists", return_value=False):
+        with pytest.raises(ValueError, match="does not exist in schema"):
+            svc.create_policy(policy)
+
+
+def test_masking_service_create_policy_invalid_column():
+    from app.services.masking_service import MaskingService
+    svc = MaskingService()
+    policy = MaskingPolicy(
+        table_name="patients",
+        column_name="nonexistent_col",
+        strategy="REDACT",
+    )
+    with patch("app.services.masking_service.db.table_exists", return_value=True), \
+         patch("app.services.masking_service.db.get_table_schema", return_value=[{"column_name": "email"}, {"column_name": "phone"}]):
+        with pytest.raises(ValueError, match="Column 'nonexistent_col' does not exist"):
+            svc.create_policy(policy)
+
+
+def test_masking_service_create_policy_invalid_strategy():
+    from app.services.masking_service import MaskingService
+    svc = MaskingService()
+    policy = MaskingPolicy(
+        table_name="patients",
+        column_name="email",
+        strategy="INVALID_MAGIC_STRATEGY",
+    )
+    with pytest.raises(ValueError, match="Invalid masking strategy"):
+        svc.create_policy(policy)
+
+
+def test_api_create_policy_endpoint(client):
+    policy_data = {
+        "table_name": "patients",
+        "column_name": "phone",
+        "strategy": "PHONE_LAST4",
+        "schema_name": "public",
+    }
+    with patch("app.api.routes.masking.masking_service.create_policy") as mock_create:
+        mock_create.return_value = MaskingPolicy(
+            id=20,
+            name="patients.phone",
+            table_name="patients",
+            column_name="phone",
+            strategy="PHONE_LAST4",
+            schema_name="public",
+            status="ACTIVE",
+            is_active=True,
+        )
+        res = client.post("/api/v1/masking/policies", json=policy_data)
+        assert res.status_code == 201
+        data = res.json()
+        assert data["id"] == 20
+        assert data["table_name"] == "patients"
+        assert data["column_name"] == "phone"
+        assert data["strategy"] == "PHONE_LAST4"
+
+
+def test_api_create_policy_endpoint_invalid_table_rejected(client):
+    policy_data = {
+        "table_name": "ghost_table",
+        "column_name": "id",
+        "strategy": "REDACT",
+    }
+    with patch("app.api.routes.masking.masking_service.create_policy", side_effect=ValueError("Table 'ghost_table' does not exist in schema 'public'")):
+        res = client.post("/api/v1/masking/policies", json=policy_data)
+        assert res.status_code == 400
+        assert "ghost_table" in res.json()["detail"]
+
 
 

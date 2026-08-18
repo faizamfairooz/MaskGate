@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from app.database.repositories import PolicyRepository
 from app.schemas.masking import MaskingPolicy
@@ -31,3 +31,8 @@ class PolicyManager:
         self, table_name: str, columns: List[str], schema_name: str = "public"
     ) -> List[MaskingPolicy]:
         return self._repo.get_policies_for_table(table_name, columns, schema_name)
+
+    def get_policies_for_tables(
+        self, tables: List[Tuple[str, str]], columns: Optional[List[str]] = None
+    ) -> List[MaskingPolicy]:
+        return self._repo.get_policies_for_tables(tables, columns)

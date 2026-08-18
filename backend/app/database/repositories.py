@@ -95,19 +95,35 @@ class PolicyRepository:
     def get_policies_for_table(
         self, table_name: str, columns: List[str], schema_name: str = "public"
     ) -> List[MaskingPolicy]:
-        if not columns:
+        return self.get_policies_for_tables([(schema_name, table_name)], columns)
+
+    def get_policies_for_tables(
+        self, tables: List[Tuple[str, str]], columns: Optional[List[str]] = None
+    ) -> List[MaskingPolicy]:
+        if not tables:
             return []
-        placeholders = ", ".join(["%s"] * len(columns))
+        table_conditions = []
+        params: List[Any] = []
+        for schema_name, table_name in tables:
+            table_conditions.append("(table_name = %s AND COALESCE(schema_name, 'public') = %s)")
+            params.extend([table_name, schema_name or "public"])
+
+        tables_clause = " OR ".join(table_conditions)
+        cols_clause = ""
+        if columns:
+            placeholders = ", ".join(["%s"] * len(columns))
+            cols_clause = f"AND LOWER(column_name) IN ({placeholders})"
+            params.extend([c.lower() for c in columns])
+
         query = f"""
             SELECT * FROM masking_policies
             WHERE is_active = TRUE
               AND UPPER(status) = 'ACTIVE'
-              AND table_name = %s
-              AND COALESCE(schema_name, 'public') = %s
-              AND LOWER(column_name) IN ({placeholders})
+              AND ({tables_clause})
+              {cols_clause}
+            ORDER BY id
         """
-        lowered_cols = [c.lower() for c in columns]
-        rows = db.execute_query(query, (table_name, schema_name, *lowered_cols))
+        rows = db.execute_query(query, tuple(params))
         return [self._row_to_policy(r) for r in rows]
 
     def _row_to_policy(self, row: Dict[str, Any]) -> MaskingPolicy:
@@ -138,8 +154,8 @@ class RecommendationRepository:
     def create(self, rec: MaskingRecommendation) -> MaskingRecommendation:
         query = """
             INSERT INTO masking_recommendations
-                (schema_name, table_name, column_name, data_type, sensitivity, recommended_strategy, rationale, source, status)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (schema_name, table_name, column_name, data_type, sensitivity, confidence, recommended_strategy, rationale, source, status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id, created_at, updated_at
         """
         rows = db.execute_query(
@@ -150,6 +166,7 @@ class RecommendationRepository:
                 rec.column_name,
                 rec.data_type or "text",
                 rec.sensitivity or "MEDIUM",
+                rec.confidence or "HIGH",
                 rec.recommended_strategy,
                 rec.rationale or "",
                 rec.source or "llm",
@@ -218,6 +235,7 @@ class RecommendationRepository:
             column_name=row["column_name"],
             data_type=row.get("data_type") or "text",
             sensitivity=row.get("sensitivity") or "MEDIUM",
+            confidence=row.get("confidence") or "HIGH",
             recommended_strategy=row["recommended_strategy"],
             rationale=row.get("rationale") or "",
             source=row.get("source") or "llm",

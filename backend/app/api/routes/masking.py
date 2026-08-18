@@ -38,6 +38,17 @@ async def get_policies(status: Optional[str] = Query(default="ACTIVE")):
         raise HTTPException(status_code=500, detail=f"Failed to retrieve policies: {str(e)}")
 
 
+@router.post("/policies", response_model=MaskingPolicy, status_code=201)
+async def create_policy(policy: MaskingPolicy):
+    """Create or update a masking policy with table and column validation."""
+    try:
+        return masking_service.create_policy(policy)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create policy: {str(e)}")
+
+
 @router.get("/policies/{policy_id}", response_model=MaskingPolicy)
 async def get_policy(policy_id: int):
     policy = masking_service.get_policy(policy_id)

@@ -1,5 +1,5 @@
-from datetime import datetime
-from typing import List, Any, Optional, Tuple
+from datetime import datetime, timezone
+from typing import List, Any, Optional, Tuple, Set, Dict
 import hashlib
 import re
 import time
@@ -8,6 +8,7 @@ from app.database.postgresql import db
 from app.schemas.query import QueryResponse, QueryHistory
 from app.services.masking_service import MaskingService
 from app.schemas.masking import MaskingRequest
+from app.utils.query_parser import SQLQueryParser, TableReference
 
 
 class QueryService:
@@ -27,6 +28,7 @@ class QueryService:
 
     def __init__(self):
         self.masking_service = MaskingService()
+        self.query_parser = SQLQueryParser()
         self.query_history: List[QueryHistory] = []
 
     def execute_query(
@@ -39,8 +41,41 @@ class QueryService:
         if not is_valid:
             raise ValueError(message)
 
+        from app.config.settings import settings
+
+        # 1. Discover referenced tables (multi-table / JOIN support)
+        tables = self.query_parser.extract_tables(query)
+
+        # 2. Apply safe default LIMIT if outer LIMIT is missing
+        default_limit = getattr(settings, "DEFAULT_QUERY_LIMIT", 100)
+        executed_query = self.query_parser.apply_default_limit(query, default_limit=default_limit)
+
+        # 3. DO_NOT_SHOW query rewriting before PostgreSQL execution
+        if apply_masking and tables:
+            table_tuples = [(t.schema_name, t.table_name) for t in tables]
+            active_policies = self.masking_service.policy_manager.get_policies_for_tables(table_tuples)
+            hidden_by_table: Dict[str, Set[str]] = {}
+            for p in active_policies:
+                strat = (p.strategy or "").strip().upper()
+                if strat in ("DO_NOT_SHOW", "HIDE", "HIDDEN", "DONOTSHOW"):
+                    hidden_by_table.setdefault(p.table_name, set()).add(p.column_name)
+
+            if hidden_by_table:
+                def _get_table_cols(tbl: str, schema: str) -> List[str]:
+                    try:
+                        cols = db.get_table_schema(tbl, schema=schema)
+                        return [c["column_name"] for c in cols]
+                    except Exception:
+                        return []
+
+                rewritten, was_rewritten = self.query_parser.rewrite_for_hidden_columns(
+                    executed_query, hidden_by_table, _get_table_cols
+                )
+                if was_rewritten:
+                    executed_query = rewritten
+
         start_time = time.time()
-        results = db.execute_query(query)
+        results = db.execute_query(executed_query)
 
         if not results:
             return QueryResponse(
@@ -60,8 +95,8 @@ class QueryService:
         llm_detection_summary = None
 
         if apply_masking or mask_suspicious:
-            from app.config.settings import settings
             schema_name, table_name = self._extract_table_and_schema(query)
+            table_dicts = [{"schema": t.schema_name, "table": t.table_name} for t in tables] if tables else None
 
             runtime_enabled = getattr(settings, "ENABLE_RUNTIME_DETECTION", True)
             effective_auto_detect = mask_suspicious and runtime_enabled
@@ -74,6 +109,7 @@ class QueryService:
                 MaskingRequest(
                     schema_name=schema_name,
                     table_name=table_name,
+                    tables=table_dicts,
                     columns=columns,
                     data=rows,
                     policy_ids=[] if not apply_masking else None,
@@ -94,9 +130,9 @@ class QueryService:
         self.query_history.append(
             QueryHistory(
                 query=query,
-                executed_at=datetime.utcnow(),
+                executed_at=datetime.now(timezone.utc),
                 execution_time=execution_time,
-                row_count=len(rows),
+                row_count=len(masked_data),
                 masked=apply_masking,
             )
         )
@@ -104,7 +140,7 @@ class QueryService:
         return QueryResponse(
             columns=columns,
             rows=masked_data,
-            row_count=len(rows),
+            row_count=len(masked_data),
             execution_time=execution_time,
             masked_columns=masked_columns,
             query_hash=query_hash,
@@ -145,6 +181,10 @@ class QueryService:
           - table
           - schema.table
         """
+        tables = self.query_parser.extract_tables(query)
+        if tables:
+            return tables[0].schema_name, tables[0].table_name
+
         query_upper = query.upper()
         if "FROM" in query_upper:
             from_idx = query_upper.index("FROM") + 4
@@ -162,3 +202,4 @@ class QueryService:
 
     def _generate_query_hash(self, query: str) -> str:
         return hashlib.md5(query.encode()).hexdigest()
+

@@ -27,6 +27,7 @@ export const maskingAPI = {
   getStrategies: () => api.get('/masking/strategies'),
   getPolicies: (status = 'ACTIVE') => api.get('/masking/policies', { params: { status } }),
   getPolicy: (id) => api.get(`/masking/policies/${id}`),
+  createPolicy: (data) => api.post('/masking/policies', data),
   deletePolicy: (id) => api.delete(`/masking/policies/${id}`),
   getRecommendations: (params) => api.get('/masking/recommendations', { params }),
   analyzeAndQueue: (data = {}) => api.post('/masking/recommendations/analyze-and-queue', data),

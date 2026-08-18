@@ -43,12 +43,21 @@ class MaskingEngine:
             if getattr(p, "is_active", True) and (getattr(p, "status", "ACTIVE") or "").upper() == "ACTIVE"
         ]
 
+        hidden_indices = set()
+
         for policy in active_policies:
             policy_col_norm = (policy.column_name or "").strip().lower()
             if policy_col_norm not in col_name_to_indices:
                 continue
 
             target_indices = col_name_to_indices[policy_col_norm]
+            strat_upper = (policy.strategy or "").strip().upper()
+            if strat_upper in ("DO_NOT_SHOW", "HIDE", "HIDDEN", "DONOTSHOW"):
+                for col_idx in target_indices:
+                    hidden_indices.add(col_idx)
+                    masked_columns.add(columns[col_idx])
+                continue
+
             try:
                 strategy = self.strategy_factory.get_strategy(policy.strategy)
             except ValueError:
@@ -66,6 +75,12 @@ class MaskingEngine:
 
             for col_idx in target_indices:
                 masked_columns.add(columns[col_idx])
+
+        # Exclude DO_NOT_SHOW columns from results in-memory (defense in depth)
+        if hidden_indices:
+            keep_indices = [i for i in range(len(columns)) if i not in hidden_indices]
+            masked_data = [[row[i] for i in keep_indices if i < len(row)] for row in masked_data]
+            columns[:] = [columns[i] for i in keep_indices]
 
         runtime_summary = None
         if auto_detect:

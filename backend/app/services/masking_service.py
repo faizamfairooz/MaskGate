@@ -35,6 +35,37 @@ class MaskingService:
                 f"Column '{column_name}' does not exist in table '{table_name}' (schema '{schema_name}')"
             )
 
+    def create_policy(self, policy: MaskingPolicy) -> MaskingPolicy:
+        """
+        Create or update a masking policy with PostgreSQL table and column validation.
+        """
+        target_schema = policy.schema_name or "public"
+        if not policy.table_name or not policy.table_name.strip():
+            raise ValueError("Table name is required")
+        if not policy.column_name or not policy.column_name.strip():
+            raise ValueError("Column name is required")
+        if not policy.strategy or not policy.strategy.strip():
+            raise ValueError("Masking strategy is required")
+
+        available_strategies = self.get_available_strategies()
+        if policy.strategy.upper() not in [s.upper() for s in available_strategies.keys()]:
+            raise ValueError(
+                f"Invalid masking strategy '{policy.strategy}'. Must be one of: {list(available_strategies.keys())}"
+            )
+
+        self.validate_table_and_column(
+            policy.table_name.strip(), policy.column_name.strip(), schema_name=target_schema
+        )
+
+        if not policy.name:
+            policy.name = f"{policy.table_name}.{policy.column_name}"
+        if not policy.source:
+            policy.source = "admin_manual"
+        policy.status = policy.status or "ACTIVE"
+        policy.is_active = True
+
+        return self.policy_manager.create_policy(policy)
+
     def get_all_policies(self, status: Optional[str] = "ACTIVE") -> List[MaskingPolicy]:
         """Retrieve all active masking policies."""
         return self.policy_manager.get_all_policies(status=status)
@@ -72,6 +103,14 @@ class MaskingService:
 
         target_schema = rec.schema_name or "public"
         self.validate_table_and_column(rec.table_name, rec.column_name, schema_name=target_schema)
+
+        available_strategies = self.get_available_strategies()
+        if not rec.recommended_strategy or rec.recommended_strategy.upper() not in [
+            s.upper() for s in available_strategies.keys()
+        ]:
+            raise ValueError(
+                f"Invalid masking strategy '{rec.recommended_strategy}'. Must be one of: {list(available_strategies.keys())}"
+            )
 
         existing_active = self.policy_manager.find_active_policy(
             table_name=rec.table_name, column_name=rec.column_name, schema_name=target_schema
@@ -149,12 +188,18 @@ class MaskingService:
                     if hasattr(col_rec.recommended_strategy, "value")
                     else str(col_rec.recommended_strategy)
                 )
+                confidence_str = (
+                    col_rec.confidence.value
+                    if hasattr(col_rec, "confidence") and hasattr(col_rec.confidence, "value")
+                    else str(getattr(col_rec, "confidence", "HIGH") or "HIGH")
+                )
                 rec = MaskingRecommendation(
                     schema_name=schema_name,
                     table_name=tbl,
                     column_name=col_rec.column,
                     data_type=col_rec.data_type,
                     sensitivity=sensitivity_str,
+                    confidence=confidence_str,
                     recommended_strategy=strategy_str,
                     rationale=col_rec.rationale or "",
                     source=col_rec.source or "llm",
@@ -177,11 +222,23 @@ class MaskingService:
                 p = self.get_policy(pid)
                 if p:
                     policies.append(p)
-        else:
+        elif request.tables:
+            table_tuples = []
+            for t in request.tables:
+                if isinstance(t, dict):
+                    table_tuples.append((t.get("schema") or t.get("schema_name") or "public", t.get("table") or t.get("table_name") or ""))
+                elif isinstance(t, (list, tuple)) and len(t) >= 2:
+                    table_tuples.append((t[0], t[1]))
+                elif isinstance(t, str):
+                    table_tuples.append(("public", t))
+            policies = self.policy_manager.get_policies_for_tables(table_tuples, request.columns)
+        elif request.table_name:
             schema = getattr(request, "schema_name", None) or "public"
             policies = self.policy_manager.get_policies_for_table(
                 request.table_name, request.columns, schema_name=schema
             )
+        else:
+            policies = []
 
         masked_data, masked_columns, runtime_summary = self.engine.apply_masking(
             data=request.data,

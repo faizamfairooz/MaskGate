@@ -242,6 +242,10 @@ class TestGroup3ApprovedPolicyDeterministicMasking:
         orig_email = orig_row["email"]
         orig_phone = orig_row["phone"]
         orig_name = orig_row["full_name"]
+        # Clean up any leftover active policy for patients.full_name to ensure test isolation
+        existing_fn = policy_repo.find_active_policy("patients", "full_name")
+        if existing_fn:
+            policy_repo.delete_policy(existing_fn.id)
 
         # 2. Ensure active policies for patients.email (EMAIL) and patients.phone (PHONE_LAST4)
         policy_repo.create_policy(
@@ -848,3 +852,89 @@ class TestGroup11ResponseMetadataAndAudit:
         assert "llm_detection_enabled" in data
         assert "runtime_detection_summary" in data
         assert "llm_detection_summary" in data
+
+
+# ===========================================================================
+# TEST GROUP 12: Manual Policy Creation & Dynamic Column Validation (Mentor Requirement)
+# ===========================================================================
+@pytest.mark.integration
+class TestGroup12ManualPolicyCreation:
+    """Verify manual policy creation via dropdown selection, schema validation, and enforcement."""
+
+    def test_manual_policy_creation_and_query_masking_e2e(self, client, policy_repo):
+        # 1. Create policy for patients.phone using POST /api/v1/masking/policies
+        create_resp = client.post(
+            "/api/v1/masking/policies",
+            json={
+                "table_name": "patients",
+                "column_name": "phone",
+                "strategy": "PHONE_LAST4",
+                "schema_name": "public",
+                "sensitivity": "HIGH",
+            },
+        )
+        assert create_resp.status_code == 201
+        created_data = create_resp.json()
+        assert created_data["table_name"] == "patients"
+        assert created_data["column_name"] == "phone"
+        assert created_data["strategy"] == "PHONE_LAST4"
+        assert created_data["status"] == "ACTIVE"
+        policy_id = created_data["id"]
+
+        # 2. Execute query and verify phone column is masked with PHONE_LAST4
+        query_resp = client.post(
+            "/api/v1/query",
+            json={
+                "query": "SELECT patient_id, phone FROM patients ORDER BY patient_id LIMIT 3",
+                "apply_masking": True,
+                "mask_suspicious": False,
+            },
+        )
+        assert query_resp.status_code == 200
+        query_data = query_resp.json()
+        assert "phone" in query_data["masked_columns"]
+        for row in query_data["rows"]:
+            phone_val = row[1]
+            # PHONE_LAST4 format check
+            assert phone_val.startswith("******")
+
+        # 3. Clean up policy
+        del_resp = client.delete(f"/api/v1/masking/policies/{policy_id}")
+        assert del_resp.status_code == 200
+
+    def test_manual_policy_creation_rejects_nonexistent_table(self, client):
+        resp = client.post(
+            "/api/v1/masking/policies",
+            json={
+                "table_name": "nonexistent_users_table",
+                "column_name": "email",
+                "strategy": "EMAIL",
+            },
+        )
+        assert resp.status_code == 400
+        assert "does not exist in schema" in resp.json()["detail"]
+
+    def test_manual_policy_creation_rejects_nonexistent_column(self, client):
+        resp = client.post(
+            "/api/v1/masking/policies",
+            json={
+                "table_name": "patients",
+                "column_name": "fake_column_xyz",
+                "strategy": "EMAIL",
+            },
+        )
+        assert resp.status_code == 400
+        assert "Column 'fake_column_xyz' does not exist" in resp.json()["detail"]
+
+    def test_manual_policy_creation_rejects_invalid_strategy(self, client):
+        resp = client.post(
+            "/api/v1/masking/policies",
+            json={
+                "table_name": "patients",
+                "column_name": "email",
+                "strategy": "TOTALLY_BOGUS_STRATEGY",
+            },
+        )
+        assert resp.status_code == 400
+        assert "Invalid masking strategy" in resp.json()["detail"]
+

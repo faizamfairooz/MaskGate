@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { maskingAPI } from '../services/api'
+import { maskingAPI, schemaAPI } from '../services/api'
 
 function MaskingPolicies() {
   const [policies, setPolicies] = useState([])
@@ -7,11 +7,31 @@ function MaskingPolicies() {
   const [loadingPolicies, setLoadingPolicies] = useState(false)
   const [loadingRecs, setLoadingRecs] = useState(false)
   const [analyzing, setAnalyzing] = useState(false)
+  const [actionLoading, setActionLoading] = useState({}) // { [recId]: 'approving' | 'rejecting' }
   const [tab, setTab] = useState('review') // 'review' or 'policies'
+  const [viewMode, setViewMode] = useState('cards') // 'cards' or 'table'
   const [statusFilter, setStatusFilter] = useState('PENDING')
   const [tableFilter, setTableFilter] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
   const [message, setMessage] = useState(null)
   const [errorMessage, setErrorMessage] = useState(null)
+  const [fetchError, setFetchError] = useState(null)
+
+  // Policy Creation Form State
+  const [availableSchemas, setAvailableSchemas] = useState(['public'])
+  const [selectedSchema, setSelectedSchema] = useState('public')
+  const [availableTables, setAvailableTables] = useState([])
+  const [availableColumns, setAvailableColumns] = useState([])
+  const [availableStrategies, setAvailableStrategies] = useState({})
+  const [loadingSchemas, setLoadingSchemas] = useState(false)
+  const [loadingTables, setLoadingTables] = useState(false)
+  const [loadingColumns, setLoadingColumns] = useState(false)
+  const [creatingPolicy, setCreatingPolicy] = useState(false)
+  const [selectedTable, setSelectedTable] = useState('')
+  const [selectedColumn, setSelectedColumn] = useState('')
+  const [selectedStrategy, setSelectedStrategy] = useState('EMAIL')
+  const [selectedSensitivity, setSelectedSensitivity] = useState('MEDIUM')
+  const [policyDescription, setPolicyDescription] = useState('')
 
   const showNotification = (msg, isError = false) => {
     if (isError) {
@@ -25,6 +45,113 @@ function MaskingPolicies() {
       setMessage(null)
       setErrorMessage(null)
     }, 5000)
+  }
+
+  const fetchSchemas = useCallback(async () => {
+    setLoadingSchemas(true)
+    try {
+      const response = await schemaAPI.getSchemas()
+      const list = response.data || ['public']
+      setAvailableSchemas(list.length > 0 ? list : ['public'])
+    } catch (error) {
+      console.error('Failed to fetch schemas:', error)
+    } finally {
+      setLoadingSchemas(false)
+    }
+  }, [])
+
+  const fetchStrategies = useCallback(async () => {
+    try {
+      const response = await maskingAPI.getStrategies()
+      setAvailableStrategies(response.data || {})
+    } catch (error) {
+      console.error('Failed to fetch strategies:', error)
+    }
+  }, [])
+
+  const fetchTables = useCallback(async (schema = 'public') => {
+    setLoadingTables(true)
+    try {
+      const response = await schemaAPI.getTables(schema)
+      setAvailableTables(response.data || [])
+    } catch (error) {
+      console.error('Failed to fetch tables:', error)
+    } finally {
+      setLoadingTables(false)
+    }
+  }, [])
+
+  const handleSchemaChange = async (newSchema) => {
+    setSelectedSchema(newSchema)
+    setSelectedTable('')
+    setSelectedColumn('')
+    setAvailableColumns([])
+    await fetchTables(newSchema)
+  }
+
+  const handleTableChange = async (newTable) => {
+    setSelectedTable(newTable)
+    setSelectedColumn('')
+    setAvailableColumns([])
+
+    if (!newTable) {
+      return
+    }
+
+    setLoadingColumns(true)
+    try {
+      const response = await schemaAPI.getTableSchema(newTable, selectedSchema || 'public')
+      const cols = response.data?.columns || []
+      setAvailableColumns(cols)
+    } catch (error) {
+      console.error('Failed to load table columns:', error)
+      showNotification(`Failed to load columns for table "${newTable}"`, true)
+    } finally {
+      setLoadingColumns(false)
+    }
+  }
+
+  const handleCreatePolicy = async (e) => {
+    if (e) e.preventDefault()
+    if (!selectedTable) {
+      showNotification('Please select a table', true)
+      return
+    }
+    if (!selectedColumn) {
+      showNotification('Please select a column', true)
+      return
+    }
+    if (!selectedStrategy) {
+      showNotification('Please select a masking strategy', true)
+      return
+    }
+
+    setCreatingPolicy(true)
+    try {
+      const payload = {
+        name: `${selectedTable}.${selectedColumn}`,
+        description: policyDescription.trim() || `Manual policy for ${selectedTable}.${selectedColumn}`,
+        table_name: selectedTable,
+        column_name: selectedColumn,
+        schema_name: selectedSchema || 'public',
+        strategy: selectedStrategy,
+        sensitivity: selectedSensitivity || 'MEDIUM',
+        status: 'ACTIVE',
+        source: 'admin_manual',
+        is_active: true
+      }
+      await maskingAPI.createPolicy(payload)
+      showNotification(`Successfully created active masking policy for "${selectedTable}.${selectedColumn}" (${selectedStrategy})!`)
+      setSelectedColumn('')
+      setPolicyDescription('')
+      await fetchPolicies()
+    } catch (error) {
+      console.error('Failed to create policy:', error)
+      const detail = error.response?.data?.detail || error.message || 'Failed to create masking policy'
+      showNotification(detail, true)
+    } finally {
+      setCreatingPolicy(false)
+    }
   }
 
   const fetchPolicies = useCallback(async () => {
@@ -41,6 +168,7 @@ function MaskingPolicies() {
 
   const fetchRecommendations = useCallback(async () => {
     setLoadingRecs(true)
+    setFetchError(null)
     try {
       const params = {}
       if (statusFilter && statusFilter !== 'ALL') {
@@ -53,6 +181,8 @@ function MaskingPolicies() {
       setRecommendations(response.data || [])
     } catch (error) {
       console.error('Failed to fetch recommendations:', error)
+      const detail = error.response?.data?.detail || error.message || 'Failed to load AI recommendations'
+      setFetchError(detail)
     } finally {
       setLoadingRecs(false)
     }
@@ -60,7 +190,10 @@ function MaskingPolicies() {
 
   useEffect(() => {
     fetchPolicies()
-  }, [fetchPolicies])
+    fetchSchemas()
+    fetchStrategies()
+    fetchTables(selectedSchema)
+  }, [fetchPolicies, fetchSchemas, fetchStrategies, fetchTables, selectedSchema])
 
   useEffect(() => {
     fetchRecommendations()
@@ -71,7 +204,7 @@ function MaskingPolicies() {
     try {
       const res = await maskingAPI.analyzeAndQueue({ schema: 'public' })
       const count = res.data?.length || 0
-      showNotification(`AI Schema Analysis complete! Queued ${count} recommendation(s) for review.`)
+      showNotification(`AI Schema Analysis complete! Queued ${count} recommendation(s) for administrator review.`)
       await fetchRecommendations()
     } catch (error) {
       console.error('Failed to analyze schema:', error)
@@ -83,27 +216,41 @@ function MaskingPolicies() {
   }
 
   const handleApprove = async (id, table, column) => {
+    setActionLoading((prev) => ({ ...prev, [id]: 'approving' }))
     try {
       const res = await maskingAPI.approveRecommendation(id)
-      showNotification(`Approved! Created active masking policy for "${table || res.data.table_name}.${column || res.data.column_name}".`)
+      showNotification(`✓ Approved! Created active masking policy for "${table || res.data.table_name}.${column || res.data.column_name}".`)
       await fetchRecommendations()
       await fetchPolicies()
     } catch (error) {
       console.error('Failed to approve recommendation:', error)
       const detail = error.response?.data?.detail || error.message || 'Failed to approve recommendation'
       showNotification(detail, true)
+    } finally {
+      setActionLoading((prev) => {
+        const copy = { ...prev }
+        delete copy[id]
+        return copy
+      })
     }
   }
 
   const handleReject = async (id, table, column) => {
+    setActionLoading((prev) => ({ ...prev, [id]: 'rejecting' }))
     try {
       await maskingAPI.rejectRecommendation(id)
-      showNotification(`Rejected recommendation for "${table}.${column}". No policy created.`)
+      showNotification(`✗ Rejected recommendation for "${table}.${column}". No policy created.`)
       await fetchRecommendations()
     } catch (error) {
       console.error('Failed to reject recommendation:', error)
       const detail = error.response?.data?.detail || error.message || 'Failed to reject recommendation'
       showNotification(detail, true)
+    } finally {
+      setActionLoading((prev) => {
+        const copy = { ...prev }
+        delete copy[id]
+        return copy
+      })
     }
   }
 
@@ -119,7 +266,30 @@ function MaskingPolicies() {
     }
   }
 
-  const pendingCount = recommendations.filter(r => r.status?.toUpperCase() === 'PENDING').length
+  // Filter recommendations based on search query
+  const filteredRecommendations = recommendations.filter((rec) => {
+    if (!searchQuery.trim()) return true
+    const query = searchQuery.toLowerCase()
+    const tableMatch = (rec.table_name || '').toLowerCase().includes(query)
+    const colMatch = (rec.column_name || '').toLowerCase().includes(query)
+    const typeMatch = (rec.data_type || '').toLowerCase().includes(query)
+    const stratMatch = (rec.recommended_strategy || '').toLowerCase().includes(query)
+    const reasonMatch = (rec.rationale || '').toLowerCase().includes(query)
+    return tableMatch || colMatch || typeMatch || stratMatch || reasonMatch
+  })
+
+  const pendingCount = recommendations.filter((r) => r.status?.toUpperCase() === 'PENDING').length
+  const approvedCount = recommendations.filter((r) => r.status?.toUpperCase() === 'APPROVED').length
+  const rejectedCount = recommendations.filter((r) => r.status?.toUpperCase() === 'REJECTED').length
+
+  const getStrategyBadgeClass = (strategy) => {
+    const s = (strategy || '').toUpperCase()
+    if (s.includes('EMAIL')) return 'badge-strategy badge-strategy-email'
+    if (s.includes('PHONE')) return 'badge-strategy badge-strategy-phone'
+    if (s.includes('PARTIAL')) return 'badge-strategy badge-strategy-partial'
+    if (s.includes('REDACT')) return 'badge-strategy badge-strategy-redact'
+    return 'badge-strategy badge-strategy-none'
+  }
 
   const getSensitivityBadgeClass = (level) => {
     const l = (level || '').toUpperCase()
@@ -128,19 +298,26 @@ function MaskingPolicies() {
     return 'badge-low'
   }
 
+  const getConfidenceBadgeClass = (conf) => {
+    const c = (conf || 'HIGH').toUpperCase()
+    if (c === 'HIGH') return 'badge-conf-high'
+    if (c === 'MEDIUM') return 'badge-conf-medium'
+    return 'badge-conf-low'
+  }
+
   return (
-    <div className="masking-policies-page" style={{ padding: '1.5rem', maxWidth: '1400px', margin: '0 auto' }}>
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
+    <div className="masking-policies-page" style={{ padding: '1.5rem', maxWidth: '1440px', margin: '0 auto' }}>
+      {/* Header with Conceptual Flow Banner */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
-          <h2 style={{ fontSize: '1.75rem', fontWeight: '700', color: '#0f172a', margin: '0 0 0.25rem 0' }}>
-            Data Masking Policy Management
+          <h2 style={{ fontSize: '1.75rem', fontWeight: '700', color: '#0f172a', margin: '0 0 0.25rem 0', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+            <span>🛡️</span> Data Masking Policy Management
           </h2>
           <p style={{ color: '#64748b', fontSize: '0.95rem', margin: 0 }}>
-            Review GenAI masking recommendations, approve or reject policies, and manage active PostgreSQL masking rules.
+            GenAI analyzes database schema metadata to recommend sensitive columns and masking strategies. Admin explicitly reviews and approves or rejects each recommendation.
           </p>
         </div>
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
           <button
             type="button"
             className="btn btn-primary"
@@ -153,39 +330,124 @@ function MaskingPolicies() {
               background: '#2563eb',
               color: 'white',
               border: 'none',
-              padding: '0.6rem 1.2rem',
+              padding: '0.6rem 1.25rem',
               borderRadius: '6px',
               fontWeight: '600',
               cursor: analyzing ? 'not-allowed' : 'pointer',
+              boxShadow: '0 2px 4px rgba(37,99,235,0.2)',
             }}
           >
-            <span>{analyzing ? '⏳' : '⚡'}</span>
-            {analyzing ? 'Analyzing Schema...' : 'Run AI Schema Analysis'}
+            {analyzing ? <span className="spinner" /> : <span>⚡</span>}
+            {analyzing ? 'Analyzing Schema with AI...' : 'Run AI Schema Analysis'}
           </button>
           <button
             type="button"
             className="btn-secondary"
             onClick={() => { fetchPolicies(); fetchRecommendations(); }}
             title="Refresh policies and recommendations"
+            style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
           >
-            ↻ Refresh
+            <span>↻</span> Refresh
           </button>
         </div>
       </div>
 
-      {/* Alerts */}
+      {/* Conceptual Flow Infographic Bar */}
+      <div style={{
+        background: '#f8fafc',
+        border: '1px solid #e2e8f0',
+        borderRadius: '8px',
+        padding: '0.75rem 1.25rem',
+        marginBottom: '1.5rem',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: '0.5rem',
+        fontSize: '0.85rem',
+        color: '#475569'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span style={{ fontWeight: '700', color: '#1e293b' }}>Flow:</span>
+          <span>Database Schema</span>
+          <span style={{ color: '#94a3b8' }}>→</span>
+          <span style={{ color: '#2563eb', fontWeight: '600' }}>AI Analysis</span>
+          <span style={{ color: '#94a3b8' }}>→</span>
+          <span style={{ color: '#7c3aed', fontWeight: '600' }}>AI Recommendations</span>
+          <span style={{ color: '#94a3b8' }}>→</span>
+          <span style={{ color: '#0d9488', fontWeight: '600' }}>Admin Review (Approve / Reject)</span>
+          <span style={{ color: '#94a3b8' }}>→</span>
+          <span style={{ color: '#16a34a', fontWeight: '700' }}>Enforced Policy</span>
+        </div>
+        <div style={{ fontSize: '0.8rem', color: '#64748b', fontStyle: 'italic' }}>
+          🔒 LLM only recommends; Administrator remains the decision maker.
+        </div>
+      </div>
+
+      {/* Overview Stat Cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
+        <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '1rem', boxShadow: '0 1px 2px rgba(0,0,0,0.03)' }}>
+          <div style={{ fontSize: '0.78rem', textTransform: 'uppercase', color: '#64748b', fontWeight: '700', letterSpacing: '0.5px' }}>
+            Pending AI Reviews
+          </div>
+          <div style={{ fontSize: '1.75rem', fontWeight: '700', color: pendingCount > 0 ? '#d97706' : '#0f172a', marginTop: '0.25rem' }}>
+            {pendingCount}
+          </div>
+          <div style={{ fontSize: '0.78rem', color: '#94a3b8', marginTop: '0.2rem' }}>
+            Awaiting administrator decision
+          </div>
+        </div>
+
+        <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '1rem', boxShadow: '0 1px 2px rgba(0,0,0,0.03)' }}>
+          <div style={{ fontSize: '0.78rem', textTransform: 'uppercase', color: '#64748b', fontWeight: '700', letterSpacing: '0.5px' }}>
+            Approved via AI
+          </div>
+          <div style={{ fontSize: '1.75rem', fontWeight: '700', color: '#16a34a', marginTop: '0.25rem' }}>
+            {approvedCount}
+          </div>
+          <div style={{ fontSize: '0.78rem', color: '#94a3b8', marginTop: '0.2rem' }}>
+            Converted into active policies
+          </div>
+        </div>
+
+        <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '1rem', boxShadow: '0 1px 2px rgba(0,0,0,0.03)' }}>
+          <div style={{ fontSize: '0.78rem', textTransform: 'uppercase', color: '#64748b', fontWeight: '700', letterSpacing: '0.5px' }}>
+            Total Active Policies
+          </div>
+          <div style={{ fontSize: '1.75rem', fontWeight: '700', color: '#2563eb', marginTop: '0.25rem' }}>
+            {policies.length}
+          </div>
+          <div style={{ fontSize: '0.78rem', color: '#94a3b8', marginTop: '0.2rem' }}>
+            Actively masking database queries
+          </div>
+        </div>
+
+        <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '1rem', boxShadow: '0 1px 2px rgba(0,0,0,0.03)' }}>
+          <div style={{ fontSize: '0.78rem', textTransform: 'uppercase', color: '#64748b', fontWeight: '700', letterSpacing: '0.5px' }}>
+            Rejected Suggestions
+          </div>
+          <div style={{ fontSize: '1.75rem', fontWeight: '700', color: '#991b1b', marginTop: '0.25rem' }}>
+            {rejectedCount}
+          </div>
+          <div style={{ fontSize: '0.78rem', color: '#94a3b8', marginTop: '0.2rem' }}>
+            Excluded from masking policies
+          </div>
+        </div>
+      </div>
+
+      {/* Notifications */}
       {message && (
-        <div style={{ padding: '0.85rem 1.25rem', marginBottom: '1.25rem', background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '8px', color: '#065f46', fontWeight: '500' }}>
-          ✓ {message}
+        <div style={{ padding: '0.85rem 1.25rem', marginBottom: '1.25rem', background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '8px', color: '#065f46', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span>✓</span> {message}
         </div>
       )}
       {errorMessage && (
-        <div style={{ padding: '0.85rem 1.25rem', marginBottom: '1.25rem', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', color: '#991b1b', fontWeight: '500' }}>
-          ⚠️ {errorMessage}
+        <div style={{ padding: '0.85rem 1.25rem', marginBottom: '1.25rem', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', color: '#991b1b', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span>⚠️</span> {errorMessage}
         </div>
       )}
 
-      {/* Tabs */}
+      {/* Main Tabs */}
       <div style={{ display: 'flex', borderBottom: '2px solid #e2e8f0', marginBottom: '1.5rem', gap: '0.5rem' }}>
         <button
           type="button"
@@ -204,13 +466,12 @@ function MaskingPolicies() {
             gap: '0.5rem',
           }}
         >
-          <span>🤖 AI Recommendation Review Queue</span>
-          {statusFilter === 'PENDING' && (
-            <span style={{ background: '#dbeafe', color: '#1e40af', padding: '0.15rem 0.5rem', borderRadius: '9999px', fontSize: '0.78rem' }}>
-              {recommendations.length}
-            </span>
-          )}
+          <span>🤖 AI Masking Recommendations</span>
+          <span style={{ background: pendingCount > 0 ? '#fef3c7' : '#e2e8f0', color: pendingCount > 0 ? '#92400e' : '#475569', padding: '0.15rem 0.55rem', borderRadius: '9999px', fontSize: '0.78rem', fontWeight: '700' }}>
+            {recommendations.length}
+          </span>
         </button>
+
         <button
           type="button"
           onClick={() => setTab('policies')}
@@ -229,229 +490,728 @@ function MaskingPolicies() {
           }}
         >
           <span>🛡️ Active Masking Policies</span>
-          <span style={{ background: '#dcfce7', color: '#166534', padding: '0.15rem 0.5rem', borderRadius: '9999px', fontSize: '0.78rem' }}>
+          <span style={{ background: '#dcfce7', color: '#166534', padding: '0.15rem 0.55rem', borderRadius: '9999px', fontSize: '0.78rem', fontWeight: '700' }}>
             {policies.length}
           </span>
         </button>
       </div>
 
-      {/* TAB 1: AI REVIEW QUEUE */}
+      {/* TAB 1: AI MASKING RECOMMENDATIONS */}
       {tab === 'review' && (
         <div>
-          {/* Filter Bar */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'white', padding: '1rem', borderRadius: '8px', border: '1px solid #e2e8f0', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '1rem' }}>
+          {/* Controls & Filter Bar */}
+          <div style={{ background: 'white', padding: '1rem 1.25rem', borderRadius: '8px', border: '1px solid #e2e8f0', marginBottom: '1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <label htmlFor="status-filter" style={{ fontWeight: '600', fontSize: '0.88rem', color: '#334155' }}>Status Filter:</label>
+              {/* Status Filter */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <label htmlFor="status-filter" style={{ fontWeight: '600', fontSize: '0.88rem', color: '#334155' }}>
+                  Status:
+                </label>
                 <select
                   id="status-filter"
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}
-                  style={{ padding: '0.4rem 0.8rem', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.88rem', background: '#f8fafc' }}
+                  style={{ padding: '0.45rem 0.8rem', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.88rem', background: '#f8fafc', color: '#0f172a', fontWeight: '500', cursor: 'pointer' }}
                 >
                   <option value="PENDING">Pending Review (Awaiting Decision)</option>
-                  <option value="APPROVED">Approved (Policies Created)</option>
+                  <option value="APPROVED">Approved (Active Policies)</option>
                   <option value="REJECTED">Rejected</option>
                   <option value="ALL">All Statuses</option>
                 </select>
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <label htmlFor="table-filter" style={{ fontWeight: '600', fontSize: '0.88rem', color: '#334155' }}>Table Filter:</label>
+              {/* Table Filter */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <label htmlFor="table-filter" style={{ fontWeight: '600', fontSize: '0.88rem', color: '#334155' }}>
+                  Table:
+                </label>
                 <input
                   id="table-filter"
                   type="text"
-                  placeholder="e.g. patients"
+                  placeholder="Filter by table name..."
                   value={tableFilter}
                   onChange={(e) => setTableFilter(e.target.value)}
-                  style={{ padding: '0.4rem 0.8rem', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.88rem' }}
+                  style={{ padding: '0.45rem 0.8rem', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.88rem', width: '180px' }}
+                />
+              </div>
+
+              {/* Search Box */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <label htmlFor="search-recommendations" style={{ fontWeight: '600', fontSize: '0.88rem', color: '#334155' }}>
+                  Search:
+                </label>
+                <input
+                  id="search-recommendations"
+                  type="text"
+                  placeholder="Search column, strategy, rationale..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  style={{ padding: '0.45rem 0.8rem', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.88rem', width: '220px' }}
                 />
               </div>
             </div>
 
-            <div style={{ fontSize: '0.85rem', color: '#64748b' }}>
-              Showing <strong>{recommendations.length}</strong> recommendation(s)
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              {/* View Toggle */}
+              <div style={{ display: 'inline-flex', background: '#f1f5f9', padding: '0.2rem', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('cards')}
+                  style={{
+                    padding: '0.35rem 0.75rem',
+                    borderRadius: '4px',
+                    border: 'none',
+                    background: viewMode === 'cards' ? 'white' : 'transparent',
+                    color: viewMode === 'cards' ? '#0f172a' : '#64748b',
+                    fontWeight: viewMode === 'cards' ? '600' : '500',
+                    fontSize: '0.82rem',
+                    cursor: 'pointer',
+                    boxShadow: viewMode === 'cards' ? '0 1px 2px rgba(0,0,0,0.05)' : 'none',
+                  }}
+                >
+                  🗂️ Cards View
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('table')}
+                  style={{
+                    padding: '0.35rem 0.75rem',
+                    borderRadius: '4px',
+                    border: 'none',
+                    background: viewMode === 'table' ? 'white' : 'transparent',
+                    color: viewMode === 'table' ? '#0f172a' : '#64748b',
+                    fontWeight: viewMode === 'table' ? '600' : '500',
+                    fontSize: '0.82rem',
+                    cursor: 'pointer',
+                    boxShadow: viewMode === 'table' ? '0 1px 2px rgba(0,0,0,0.05)' : 'none',
+                  }}
+                >
+                  📋 Table View
+                </button>
+              </div>
+
+              <div style={{ fontSize: '0.85rem', color: '#64748b' }}>
+                Showing <strong>{filteredRecommendations.length}</strong> of <strong>{recommendations.length}</strong>
+              </div>
             </div>
           </div>
 
-          {/* Recommendations Table */}
-          {loadingRecs ? (
-            <div style={{ padding: '2rem', textAlign: 'center', color: '#64748b' }}>Loading AI recommendations...</div>
-          ) : recommendations.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '3rem 1.5rem', background: 'white', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-              <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>🔍</div>
-              <h3 style={{ fontSize: '1.2rem', fontWeight: '600', color: '#0f172a', margin: '0 0 0.5rem 0' }}>
-                No recommendations found
+          {/* Loading State */}
+          {loadingRecs && (
+            <div style={{ padding: '3.5rem 1.5rem', textAlign: 'center', background: 'white', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+              <div className="spinner" style={{ width: '28px', height: '28px', borderColor: '#cbd5e1', borderTopColor: '#2563eb', marginBottom: '1rem' }} />
+              <h3 style={{ fontSize: '1.1rem', fontWeight: '600', color: '#0f172a', margin: '0 0 0.35rem 0' }}>
+                Loading AI Masking Recommendations...
               </h3>
-              <p style={{ color: '#64748b', maxWidth: '450px', margin: '0 auto 1.5rem auto', fontSize: '0.9rem' }}>
-                {statusFilter === 'PENDING'
-                  ? 'All AI recommendations have been reviewed, or no analysis has been executed yet.'
-                  : 'No recommendations match the selected filters.'}
+              <p style={{ color: '#64748b', fontSize: '0.9rem', margin: 0 }}>
+                Retrieving analyzed PostgreSQL schema suggestions and review queue.
+              </p>
+            </div>
+          )}
+
+          {/* Error State */}
+          {!loadingRecs && fetchError && (
+            <div style={{ padding: '2.5rem 1.5rem', textAlign: 'center', background: '#fef2f2', borderRadius: '8px', border: '1px solid #fecaca', color: '#991b1b' }}>
+              <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>⚠️</div>
+              <h3 style={{ fontSize: '1.15rem', fontWeight: '700', margin: '0 0 0.5rem 0' }}>
+                Failed to Load Recommendations
+              </h3>
+              <p style={{ maxWidth: '500px', margin: '0 auto 1.25rem auto', fontSize: '0.9rem', color: '#7f1d1d' }}>
+                {fetchError}
               </p>
               <button
                 type="button"
                 className="btn btn-primary"
-                onClick={handleAnalyzeAndQueue}
-                disabled={analyzing}
-                style={{
-                  background: '#2563eb',
-                  color: 'white',
-                  border: 'none',
-                  padding: '0.6rem 1.2rem',
-                  borderRadius: '6px',
-                  fontWeight: '600',
-                  cursor: analyzing ? 'not-allowed' : 'pointer',
-                }}
+                onClick={fetchRecommendations}
+                style={{ background: '#dc2626', color: 'white', border: 'none', padding: '0.55rem 1.2rem', borderRadius: '6px', fontWeight: '600', cursor: 'pointer' }}
               >
-                ⚡ Scan Database Schema with AI
+                ↻ Retry Loading
               </button>
             </div>
-          ) : (
-            <div style={{ background: 'white', borderRadius: '8px', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.88rem' }}>
-                <thead style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
-                  <tr>
-                    <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Table</th>
-                    <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Column</th>
-                    <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Data Type</th>
-                    <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Sensitivity</th>
-                    <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Recommended Strategy</th>
-                    <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Rationale</th>
-                    <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Source</th>
-                    <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569', textAlign: 'right' }}>Admin Decision</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recommendations.map((rec) => {
-                    const isPending = rec.status?.toUpperCase() === 'PENDING'
-                    const isApproved = rec.status?.toUpperCase() === 'APPROVED'
-                    const isRejected = rec.status?.toUpperCase() === 'REJECTED'
+          )}
 
-                    return (
-                      <tr key={rec.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        <td style={{ padding: '0.75rem 1rem' }}>
-                          <code style={{ fontWeight: '600', color: '#0f172a' }}>{rec.table_name}</code>
-                        </td>
-                        <td style={{ padding: '0.75rem 1rem' }}>
-                          <code style={{ fontWeight: '600', color: '#2563eb' }}>{rec.column_name}</code>
-                        </td>
-                        <td style={{ padding: '0.75rem 1rem' }}>
-                          <span className="data-type-badge">{rec.data_type || 'text'}</span>
-                        </td>
-                        <td style={{ padding: '0.75rem 1rem' }}>
-                          <span
-                            style={{
-                              display: 'inline-block',
-                              padding: '0.2rem 0.55rem',
-                              borderRadius: '4px',
-                              fontSize: '0.75rem',
-                              fontWeight: '700',
-                              background: rec.sensitivity?.toUpperCase() === 'HIGH' ? '#fee2e2' : rec.sensitivity?.toUpperCase() === 'MEDIUM' ? '#fef3c7' : '#ecfdf5',
-                              color: rec.sensitivity?.toUpperCase() === 'HIGH' ? '#991b1b' : rec.sensitivity?.toUpperCase() === 'MEDIUM' ? '#92400e' : '#065f46',
-                              border: rec.sensitivity?.toUpperCase() === 'HIGH' ? '1px solid #fca5a5' : rec.sensitivity?.toUpperCase() === 'MEDIUM' ? '1px solid #fde68a' : '1px solid #a7f3d0',
-                            }}
-                          >
-                            {rec.sensitivity}
+          {/* Empty State */}
+          {!loadingRecs && !fetchError && filteredRecommendations.length === 0 && (
+            <div style={{ textAlign: 'center', padding: '3.5rem 1.5rem', background: 'white', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+              <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>🔍</div>
+              <h3 style={{ fontSize: '1.25rem', fontWeight: '700', color: '#0f172a', margin: '0 0 0.5rem 0' }}>
+                {recommendations.length === 0 ? 'No AI Recommendations Queued' : 'No Matching Recommendations'}
+              </h3>
+              <p style={{ color: '#64748b', maxWidth: '480px', margin: '0 auto 1.5rem auto', fontSize: '0.92rem' }}>
+                {recommendations.length === 0
+                  ? 'Run AI Schema Analysis to inspect PostgreSQL tables and generate intelligent masking recommendations.'
+                  : 'Try clearing or modifying your table filter, status filter, or search query.'}
+              </p>
+              {recommendations.length === 0 ? (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={handleAnalyzeAndQueue}
+                  disabled={analyzing}
+                  style={{
+                    background: '#2563eb',
+                    color: 'white',
+                    border: 'none',
+                    padding: '0.65rem 1.4rem',
+                    borderRadius: '6px',
+                    fontWeight: '600',
+                    cursor: analyzing ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  ⚡ Scan Database Schema with AI
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => { setStatusFilter('ALL'); setTableFilter(''); setSearchQuery(''); }}
+                  style={{ padding: '0.55rem 1.2rem' }}
+                >
+                  Clear All Filters
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* View Mode 1: Detailed Cards View */}
+          {!loadingRecs && !fetchError && filteredRecommendations.length > 0 && viewMode === 'cards' && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(380px, 1fr))', gap: '1.25rem' }}>
+              {filteredRecommendations.map((rec) => {
+                const isPending = rec.status?.toUpperCase() === 'PENDING'
+                const isApproved = rec.status?.toUpperCase() === 'APPROVED'
+                const isRejected = rec.status?.toUpperCase() === 'REJECTED'
+                const isActioning = actionLoading[rec.id]
+
+                return (
+                  <div
+                    key={rec.id}
+                    className="recommendation-card"
+                    style={{
+                      borderLeft: isPending ? '4px solid #f59e0b' : isApproved ? '4px solid #16a34a' : '4px solid #ef4444',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <div>
+                      {/* Top Bar: Target Table.Column & Status */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.85rem' }}>
+                        <div>
+                          <div style={{ fontSize: '0.78rem', textTransform: 'uppercase', color: '#64748b', fontWeight: '700', letterSpacing: '0.5px' }}>
+                            Target Target Column
+                          </div>
+                          <div style={{ fontSize: '1.15rem', fontWeight: '700', color: '#0f172a', marginTop: '0.15rem' }}>
+                            <code>{rec.table_name}.{rec.column_name}</code>
+                          </div>
+                        </div>
+
+                        {/* Status Badge */}
+                        <div>
+                          {isPending && (
+                            <span className="status-badge-pending">
+                              <span>⏳</span> Pending Review
+                            </span>
+                          )}
+                          {isApproved && (
+                            <span className="status-badge-approved">
+                              <span>✓</span> Approved
+                            </span>
+                          )}
+                          {isRejected && (
+                            <span className="status-badge-rejected">
+                              <span>✗</span> Rejected
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Details Grid */}
+                      <div style={{ background: '#f8fafc', padding: '0.85rem', borderRadius: '6px', border: '1px solid #f1f5f9', marginBottom: '0.85rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.65rem', fontSize: '0.84rem' }}>
+                        <div>
+                          <span style={{ color: '#64748b', display: 'block', fontSize: '0.75rem', fontWeight: '600' }}>Detected Type:</span>
+                          <span className="data-type-badge" style={{ marginTop: '0.15rem', display: 'inline-block' }}>
+                            {rec.data_type || 'text'}
                           </span>
-                        </td>
-                        <td style={{ padding: '0.75rem 1rem' }}>
-                          <span style={{ fontWeight: '600', background: '#f1f5f9', padding: '0.2rem 0.5rem', borderRadius: '4px', border: '1px solid #e2e8f0', color: '#334155' }}>
-                            {rec.recommended_strategy}
+                        </div>
+
+                        <div>
+                          <span style={{ color: '#64748b', display: 'block', fontSize: '0.75rem', fontWeight: '600' }}>Sensitivity:</span>
+                          <span className={getSensitivityBadgeClass(rec.sensitivity)} style={{ marginTop: '0.15rem', display: 'inline-block' }}>
+                            {rec.sensitivity || 'MEDIUM'}
                           </span>
-                        </td>
-                        <td style={{ padding: '0.75rem 1rem', maxWidth: '300px', color: '#475569', fontSize: '0.83rem' }}>
-                          {rec.rationale || '—'}
-                        </td>
-                        <td style={{ padding: '0.75rem 1rem' }}>
-                          <span style={{ fontSize: '0.78rem', color: '#64748b', background: '#f8fafc', border: '1px solid #e2e8f0', padding: '0.15rem 0.4rem', borderRadius: '4px' }}>
+                        </div>
+
+                        <div>
+                          <span style={{ color: '#64748b', display: 'block', fontSize: '0.75rem', fontWeight: '600' }}>Confidence:</span>
+                          <span className={getConfidenceBadgeClass(rec.confidence)} style={{ marginTop: '0.15rem', display: 'inline-block' }}>
+                            {rec.confidence || 'HIGH'}
+                          </span>
+                        </div>
+
+                        <div>
+                          <span style={{ color: '#64748b', display: 'block', fontSize: '0.75rem', fontWeight: '600' }}>Source:</span>
+                          <span style={{ color: '#475569', fontSize: '0.8rem', marginTop: '0.15rem', display: 'inline-block' }}>
                             {rec.source || 'llm'}
                           </span>
-                        </td>
-                        <td style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>
-                          {isPending ? (
-                            <div style={{ display: 'flex', gap: '0.4rem', justifyContent: 'flex-end' }}>
-                              <button
-                                type="button"
-                                onClick={() => handleApprove(rec.id, rec.table_name, rec.column_name)}
-                                style={{
-                                  background: '#16a34a',
-                                  color: 'white',
-                                  border: 'none',
-                                  padding: '0.35rem 0.75rem',
-                                  borderRadius: '5px',
-                                  fontWeight: '600',
-                                  fontSize: '0.82rem',
-                                  cursor: 'pointer',
-                                }}
-                              >
-                                ✓ Approve
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleReject(rec.id, rec.table_name, rec.column_name)}
-                                style={{
-                                  background: '#ef4444',
-                                  color: 'white',
-                                  border: 'none',
-                                  padding: '0.35rem 0.75rem',
-                                  borderRadius: '5px',
-                                  fontWeight: '600',
-                                  fontSize: '0.82rem',
-                                  cursor: 'pointer',
-                                }}
-                              >
-                                ✗ Reject
-                              </button>
-                            </div>
-                          ) : isApproved ? (
-                            <span style={{ color: '#16a34a', fontWeight: '600', fontSize: '0.82rem' }}>
-                              ✓ Approved (Active)
+                        </div>
+                      </div>
+
+                      {/* Recommendation Strategy Highlight */}
+                      <div style={{ marginBottom: '0.85rem' }}>
+                        <span style={{ color: '#475569', fontSize: '0.8rem', fontWeight: '700', display: 'block', marginBottom: '0.35rem' }}>
+                          Recommended Masking Strategy:
+                        </span>
+                        <span className={getStrategyBadgeClass(rec.recommended_strategy)}>
+                          <span>🔒</span> {rec.recommended_strategy}
+                        </span>
+                      </div>
+
+                      {/* Rationale */}
+                      <div style={{ marginBottom: '1.25rem', fontSize: '0.84rem', color: '#475569' }}>
+                        <span style={{ fontWeight: '700', color: '#334155' }}>Reason / Rationale: </span>
+                        <span>{rec.rationale || 'Identified potential sensitive identifier via schema analysis.'}</span>
+                      </div>
+                    </div>
+
+                    {/* Admin Action Buttons */}
+                    <div style={{ borderTop: '1px solid #f1f5f9', paddingTop: '0.85rem', display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', alignItems: 'center' }}>
+                      {isPending ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => handleReject(rec.id, rec.table_name, rec.column_name)}
+                            disabled={Boolean(isActioning)}
+                            style={{
+                              background: 'white',
+                              border: '1px solid #fca5a5',
+                              color: '#dc2626',
+                              padding: '0.45rem 0.9rem',
+                              borderRadius: '6px',
+                              fontWeight: '600',
+                              fontSize: '0.85rem',
+                              cursor: isActioning ? 'not-allowed' : 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.35rem',
+                              transition: 'all 0.15s ease',
+                            }}
+                          >
+                            <span>✗</span> {isActioning === 'rejecting' ? 'Rejecting...' : 'Reject'}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleApprove(rec.id, rec.table_name, rec.column_name)}
+                            disabled={Boolean(isActioning)}
+                            style={{
+                              background: '#16a34a',
+                              border: 'none',
+                              color: 'white',
+                              padding: '0.45rem 1.1rem',
+                              borderRadius: '6px',
+                              fontWeight: '600',
+                              fontSize: '0.85rem',
+                              cursor: isActioning ? 'not-allowed' : 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.35rem',
+                              boxShadow: '0 1px 2px rgba(22,163,74,0.2)',
+                              transition: 'all 0.15s ease',
+                            }}
+                          >
+                            <span>✓</span> {isActioning === 'approving' ? 'Approving...' : 'Approve'}
+                          </button>
+                        </>
+                      ) : isApproved ? (
+                        <span style={{ color: '#16a34a', fontWeight: '600', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                          ✓ Approved (Enforced in Active Policies)
+                        </span>
+                      ) : (
+                        <span style={{ color: '#991b1b', fontWeight: '600', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                          ✗ Rejected by Admin
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {/* View Mode 2: Table View */}
+          {!loadingRecs && !fetchError && filteredRecommendations.length > 0 && viewMode === 'table' && (
+            <div style={{ background: 'white', borderRadius: '8px', border: '1px solid #e2e8f0', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.03)' }}>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.88rem' }}>
+                  <thead style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
+                    <tr>
+                      <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Table</th>
+                      <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Column</th>
+                      <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Detected Type</th>
+                      <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Sensitivity</th>
+                      <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Confidence</th>
+                      <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Recommendation</th>
+                      <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Rationale</th>
+                      <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Status</th>
+                      <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569', textAlign: 'right' }}>Admin Decision</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredRecommendations.map((rec) => {
+                      const isPending = rec.status?.toUpperCase() === 'PENDING'
+                      const isApproved = rec.status?.toUpperCase() === 'APPROVED'
+                      const isRejected = rec.status?.toUpperCase() === 'REJECTED'
+                      const isActioning = actionLoading[rec.id]
+
+                      return (
+                        <tr key={rec.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                          <td style={{ padding: '0.75rem 1rem' }}>
+                            <code style={{ fontWeight: '700', color: '#0f172a' }}>{rec.table_name}</code>
+                          </td>
+                          <td style={{ padding: '0.75rem 1rem' }}>
+                            <code style={{ fontWeight: '700', color: '#2563eb' }}>{rec.column_name}</code>
+                          </td>
+                          <td style={{ padding: '0.75rem 1rem' }}>
+                            <span className="data-type-badge">{rec.data_type || 'text'}</span>
+                          </td>
+                          <td style={{ padding: '0.75rem 1rem' }}>
+                            <span className={getSensitivityBadgeClass(rec.sensitivity)}>
+                              {rec.sensitivity}
                             </span>
-                          ) : isRejected ? (
-                            <span style={{ color: '#ef4444', fontWeight: '600', fontSize: '0.82rem' }}>
-                              ✗ Rejected
+                          </td>
+                          <td style={{ padding: '0.75rem 1rem' }}>
+                            <span className={getConfidenceBadgeClass(rec.confidence)}>
+                              {rec.confidence || 'HIGH'}
                             </span>
-                          ) : (
-                            <span>{rec.status}</span>
-                          )}
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
+                          </td>
+                          <td style={{ padding: '0.75rem 1rem' }}>
+                            <span className={getStrategyBadgeClass(rec.recommended_strategy)}>
+                              {rec.recommended_strategy}
+                            </span>
+                          </td>
+                          <td style={{ padding: '0.75rem 1rem', maxWidth: '280px', color: '#475569', fontSize: '0.83rem' }}>
+                            {rec.rationale || '—'}
+                          </td>
+                          <td style={{ padding: '0.75rem 1rem' }}>
+                            {isPending ? (
+                              <span className="status-badge-pending">Pending</span>
+                            ) : isApproved ? (
+                              <span className="status-badge-approved">Approved</span>
+                            ) : (
+                              <span className="status-badge-rejected">Rejected</span>
+                            )}
+                          </td>
+                          <td style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>
+                            {isPending ? (
+                              <div style={{ display: 'flex', gap: '0.4rem', justifyContent: 'flex-end' }}>
+                                <button
+                                  type="button"
+                                  onClick={() => handleApprove(rec.id, rec.table_name, rec.column_name)}
+                                  disabled={Boolean(isActioning)}
+                                  style={{
+                                    background: '#16a34a',
+                                    color: 'white',
+                                    border: 'none',
+                                    padding: '0.35rem 0.75rem',
+                                    borderRadius: '5px',
+                                    fontWeight: '600',
+                                    fontSize: '0.82rem',
+                                    cursor: isActioning ? 'not-allowed' : 'pointer',
+                                  }}
+                                >
+                                  {isActioning === 'approving' ? '...' : '✓ Approve'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleReject(rec.id, rec.table_name, rec.column_name)}
+                                  disabled={Boolean(isActioning)}
+                                  style={{
+                                    background: '#ef4444',
+                                    color: 'white',
+                                    border: 'none',
+                                    padding: '0.35rem 0.75rem',
+                                    borderRadius: '5px',
+                                    fontWeight: '600',
+                                    fontSize: '0.82rem',
+                                    cursor: isActioning ? 'not-allowed' : 'pointer',
+                                  }}
+                                >
+                                  {isActioning === 'rejecting' ? '...' : '✗ Reject'}
+                                </button>
+                              </div>
+                            ) : isApproved ? (
+                              <span style={{ color: '#16a34a', fontWeight: '600', fontSize: '0.82rem' }}>
+                                ✓ Approved
+                              </span>
+                            ) : isRejected ? (
+                              <span style={{ color: '#ef4444', fontWeight: '600', fontSize: '0.82rem' }}>
+                                ✗ Rejected
+                              </span>
+                            ) : (
+                              <span>{rec.status}</span>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>
       )}
 
-      {/* TAB 2: ACTIVE MASKING POLICIES */}
+      {/* TAB 2: ACTIVE MASKING POLICIES & CREATION FORM */}
       {tab === 'policies' && (
         <div>
-          <div style={{ background: 'white', padding: '1rem', borderRadius: '8px', border: '1px solid #e2e8f0', marginBottom: '1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          {/* Header Info */}
+          <div style={{ background: 'white', padding: '1rem 1.25rem', borderRadius: '8px', border: '1px solid #e2e8f0', marginBottom: '1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
-              <h3 style={{ margin: '0 0 0.25rem 0', fontSize: '1.1rem', fontWeight: '600', color: '#0f172a' }}>
-                Active Masking Rules
+              <h3 style={{ margin: '0 0 0.25rem 0', fontSize: '1.1rem', fontWeight: '700', color: '#0f172a' }}>
+                Active Masking Rules Enforced
               </h3>
               <p style={{ margin: 0, fontSize: '0.85rem', color: '#64748b' }}>
-                These approved policies are enforced by MaskGate to dynamically mask PostgreSQL columns before data is returned.
+                These approved rules are enforced deterministically by MaskGate to sanitize sensitive PostgreSQL column outputs.
               </p>
             </div>
-            <div style={{ fontSize: '0.88rem', fontWeight: '600', color: '#166534', background: '#dcfce7', padding: '0.3rem 0.8rem', borderRadius: '9999px' }}>
+            <div style={{ fontSize: '0.88rem', fontWeight: '700', color: '#166534', background: '#dcfce7', padding: '0.35rem 0.85rem', borderRadius: '9999px', border: '1px solid #bbf7d0' }}>
               {policies.length} Active Policies
             </div>
           </div>
 
+          {/* Manual Policy Creation Form */}
+          <div style={{ background: 'white', padding: '1.25rem', borderRadius: '8px', border: '1px solid #e2e8f0', marginBottom: '1.5rem', boxShadow: '0 1px 3px rgba(0,0,0,0.03)' }}>
+            <div style={{ marginBottom: '1rem', borderBottom: '1px solid #f1f5f9', paddingBottom: '0.75rem' }}>
+              <h3 style={{ margin: '0 0 0.25rem 0', fontSize: '1.05rem', fontWeight: '700', color: '#0f172a' }}>
+                Manual Policy Creator
+              </h3>
+              <p style={{ margin: 0, fontSize: '0.85rem', color: '#64748b' }}>
+                Directly define a custom policy by picking an active PostgreSQL table and column.
+              </p>
+            </div>
+
+            <form onSubmit={handleCreatePolicy} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem' }}>
+                {/* Schema Dropdown */}
+                <div>
+                  <label htmlFor="policy-schema-select" style={{ display: 'block', fontWeight: '600', fontSize: '0.85rem', color: '#334155', marginBottom: '0.35rem' }}>
+                    Schema:
+                  </label>
+                  <select
+                    id="policy-schema-select"
+                    value={selectedSchema}
+                    onChange={(e) => handleSchemaChange(e.target.value)}
+                    disabled={loadingSchemas || creatingPolicy}
+                    style={{
+                      width: '100%',
+                      padding: '0.55rem 0.75rem',
+                      borderRadius: '6px',
+                      border: '1px solid #cbd5e1',
+                      fontSize: '0.88rem',
+                      background: '#f8fafc',
+                      color: '#0f172a',
+                      fontWeight: '500',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {availableSchemas.map((sch) => (
+                      <option key={sch} value={sch}>{sch}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Table Dropdown */}
+                <div>
+                  <label htmlFor="policy-table-select" style={{ display: 'block', fontWeight: '600', fontSize: '0.85rem', color: '#334155', marginBottom: '0.35rem' }}>
+                    Table:
+                  </label>
+                  <select
+                    id="policy-table-select"
+                    value={selectedTable}
+                    onChange={(e) => handleTableChange(e.target.value)}
+                    disabled={loadingTables || creatingPolicy}
+                    style={{
+                      width: '100%',
+                      padding: '0.55rem 0.75rem',
+                      borderRadius: '6px',
+                      border: '1px solid #cbd5e1',
+                      fontSize: '0.88rem',
+                      background: '#f8fafc',
+                      color: '#0f172a',
+                      fontWeight: '500',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <option value="">[ Select table ▼ ]</option>
+                    {availableTables.map((tbl) => (
+                      <option key={tbl} value={tbl}>{tbl}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Column Dropdown */}
+                <div>
+                  <label htmlFor="policy-column-select" style={{ display: 'block', fontWeight: '600', fontSize: '0.85rem', color: '#334155', marginBottom: '0.35rem' }}>
+                    Column:
+                  </label>
+                  <select
+                    id="policy-column-select"
+                    value={selectedColumn}
+                    onChange={(e) => setSelectedColumn(e.target.value)}
+                    disabled={!selectedTable || loadingColumns || creatingPolicy}
+                    style={{
+                      width: '100%',
+                      padding: '0.55rem 0.75rem',
+                      borderRadius: '6px',
+                      border: '1px solid #cbd5e1',
+                      fontSize: '0.88rem',
+                      background: !selectedTable ? '#f1f5f9' : '#f8fafc',
+                      color: !selectedTable ? '#94a3b8' : '#0f172a',
+                      fontWeight: '500',
+                      cursor: !selectedTable ? 'not-allowed' : 'pointer'
+                    }}
+                  >
+                    <option value="">
+                      {loadingColumns
+                        ? 'Loading columns...'
+                        : !selectedTable
+                        ? '[ Select table first ]'
+                        : '[ Select column ▼ ]'}
+                    </option>
+                    {availableColumns.map((col) => {
+                      const colName = typeof col === 'string' ? col : col.column_name
+                      const colType = typeof col === 'object' && col.data_type ? ` (${col.data_type})` : ''
+                      return (
+                        <option key={colName} value={colName}>
+                          {colName}{colType}
+                        </option>
+                      )
+                    })}
+                  </select>
+                </div>
+
+                {/* Masking Strategy Dropdown */}
+                <div>
+                  <label htmlFor="policy-strategy-select" style={{ display: 'block', fontWeight: '600', fontSize: '0.85rem', color: '#334155', marginBottom: '0.35rem' }}>
+                    Masking Strategy:
+                  </label>
+                  <select
+                    id="policy-strategy-select"
+                    value={selectedStrategy}
+                    onChange={(e) => setSelectedStrategy(e.target.value)}
+                    disabled={creatingPolicy}
+                    style={{
+                      width: '100%',
+                      padding: '0.55rem 0.75rem',
+                      borderRadius: '6px',
+                      border: '1px solid #cbd5e1',
+                      fontSize: '0.88rem',
+                      background: '#f8fafc',
+                      color: '#0f172a',
+                      fontWeight: '500',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {Object.keys(availableStrategies).length > 0 ? (
+                      Object.entries(availableStrategies).map(([stratKey, desc]) => (
+                        <option key={stratKey} value={stratKey}>
+                          {stratKey} - {desc}
+                        </option>
+                      ))
+                    ) : (
+                      <>
+                        <option value="EMAIL">EMAIL - Mask email address</option>
+                        <option value="PHONE_LAST4">PHONE_LAST4 - Mask phone number</option>
+                        <option value="PARTIAL">PARTIAL - Preserve edge characters</option>
+                        <option value="REDACT">REDACT - Full redaction</option>
+                        <option value="DO_NOT_SHOW">DO_NOT_SHOW - Exclude column from results</option>
+                        <option value="NONE">NONE - Original unmasked</option>
+                      </>
+                    )}
+                  </select>
+                </div>
+              </div>
+
+              {/* Policy Description / Rationale & Submit Button */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 180px', gap: '1rem', alignItems: 'flex-end' }}>
+                <div>
+                  <label htmlFor="policy-description-input" style={{ display: 'block', fontWeight: '600', fontSize: '0.85rem', color: '#334155', marginBottom: '0.35rem' }}>
+                    Policy Description (Optional):
+                  </label>
+                  <input
+                    id="policy-description-input"
+                    type="text"
+                    value={policyDescription}
+                    onChange={(e) => setPolicyDescription(e.target.value)}
+                    placeholder="e.g. Mask patient email for dev queries"
+                    disabled={creatingPolicy}
+                    style={{
+                      width: '100%',
+                      padding: '0.55rem 0.75rem',
+                      borderRadius: '6px',
+                      border: '1px solid #cbd5e1',
+                      fontSize: '0.88rem',
+                      background: '#f8fafc',
+                      color: '#0f172a',
+                      boxSizing: 'border-box'
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <button
+                    type="submit"
+                    id="create-policy-btn"
+                    disabled={!selectedTable || !selectedColumn || !selectedStrategy || creatingPolicy}
+                    style={{
+                      width: '100%',
+                      padding: '0.55rem 1rem',
+                      background: (!selectedTable || !selectedColumn || !selectedStrategy || creatingPolicy) ? '#94a3b8' : '#2563eb',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '6px',
+                      fontWeight: '600',
+                      fontSize: '0.88rem',
+                      cursor: (!selectedTable || !selectedColumn || !selectedStrategy || creatingPolicy) ? 'not-allowed' : 'pointer',
+                      transition: 'background-color 0.15s ease',
+                      height: '38px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '0.4rem'
+                    }}
+                  >
+                    <span>{creatingPolicy ? '⏳' : '➕'}</span>
+                    {creatingPolicy ? 'Creating...' : 'Create Policy'}
+                  </button>
+                </div>
+              </div>
+
+              {/* DO_NOT_SHOW explanation alert */}
+              {selectedStrategy.toUpperCase() === 'DO_NOT_SHOW' && (
+                <div style={{ padding: '0.65rem 0.85rem', background: '#fef3c7', border: '1px solid #fde68a', borderRadius: '6px', fontSize: '0.85rem', color: '#92400e', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span>🔒</span>
+                  <span><strong>DO_NOT_SHOW:</strong> Column will not be returned to the query result. Query rewriter projects permitted columns before PostgreSQL execution where safe, with in-memory exclusion fallback.</span>
+                </div>
+              )}
+            </form>
+          </div>
+
+          {/* Active Policies Table */}
           {loadingPolicies ? (
-            <div style={{ padding: '2rem', textAlign: 'center', color: '#64748b' }}>Loading active policies...</div>
+            <div style={{ padding: '3rem 1rem', textAlign: 'center', color: '#64748b' }}>
+              <div className="spinner" style={{ width: '24px', height: '24px', borderColor: '#cbd5e1', borderTopColor: '#2563eb', marginBottom: '0.75rem' }} />
+              <div>Loading active policies...</div>
+            </div>
           ) : policies.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '3rem 1.5rem', background: 'white', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+            <div style={{ textAlign: 'center', padding: '3.5rem 1.5rem', background: 'white', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
               <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>🛡️</div>
               <h3 style={{ fontSize: '1.2rem', fontWeight: '600', color: '#0f172a', margin: '0 0 0.5rem 0' }}>
-                No active masking policies
+                No Active Masking Policies
               </h3>
               <p style={{ color: '#64748b', maxWidth: '450px', margin: '0 auto 1.5rem auto', fontSize: '0.9rem' }}>
-                Switch to the AI Review Queue to approve recommended masking policies.
+                Switch to the AI Masking Recommendations tab to approve recommended rules or create a custom policy above.
               </p>
               <button
                 type="button"
@@ -461,96 +1221,89 @@ function MaskingPolicies() {
                   background: '#2563eb',
                   color: 'white',
                   border: 'none',
-                  padding: '0.6rem 1.2rem',
+                  padding: '0.6rem 1.25rem',
                   borderRadius: '6px',
                   fontWeight: '600',
                   cursor: 'pointer',
                 }}
               >
-                Go to AI Review Queue
+                Go to AI Recommendations Queue
               </button>
             </div>
           ) : (
-            <div style={{ background: 'white', borderRadius: '8px', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.88rem' }}>
-                <thead style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
-                  <tr>
-                    <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Policy Name</th>
-                    <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Schema</th>
-                    <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Table</th>
-                    <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Column</th>
-                    <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Strategy</th>
-                    <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Sensitivity</th>
-                    <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Status</th>
-                    <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Source</th>
-                    <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569', textAlign: 'right' }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {policies.map((policy) => (
-                    <tr key={policy.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                      <td style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#0f172a' }}>
-                        {policy.name || `${policy.table_name}.${policy.column_name}`}
-                      </td>
-                      <td style={{ padding: '0.75rem 1rem', color: '#64748b' }}>
-                        <code>{policy.schema_name || 'public'}</code>
-                      </td>
-                      <td style={{ padding: '0.75rem 1rem' }}>
-                        <code>{policy.table_name}</code>
-                      </td>
-                      <td style={{ padding: '0.75rem 1rem' }}>
-                        <code style={{ color: '#2563eb', fontWeight: '600' }}>{policy.column_name}</code>
-                      </td>
-                      <td style={{ padding: '0.75rem 1rem' }}>
-                        <span style={{ fontWeight: '600', background: '#f1f5f9', padding: '0.2rem 0.5rem', borderRadius: '4px', border: '1px solid #e2e8f0', color: '#334155' }}>
-                          {policy.strategy}
-                        </span>
-                      </td>
-                      <td style={{ padding: '0.75rem 1rem' }}>
-                        <span
-                          style={{
-                            display: 'inline-block',
-                            padding: '0.2rem 0.5rem',
-                            borderRadius: '4px',
-                            fontSize: '0.75rem',
-                            fontWeight: '700',
-                            background: policy.sensitivity?.toUpperCase() === 'HIGH' ? '#fee2e2' : '#fef3c7',
-                            color: policy.sensitivity?.toUpperCase() === 'HIGH' ? '#991b1b' : '#92400e',
-                          }}
-                        >
-                          {policy.sensitivity || 'MEDIUM'}
-                        </span>
-                      </td>
-                      <td style={{ padding: '0.75rem 1rem' }}>
-                        <span style={{ background: '#dcfce7', color: '#166534', padding: '0.2rem 0.55rem', borderRadius: '9999px', fontSize: '0.75rem', fontWeight: '700', border: '1px solid #bbf7d0' }}>
-                          {policy.status || 'ACTIVE'}
-                        </span>
-                      </td>
-                      <td style={{ padding: '0.75rem 1rem', color: '#64748b', fontSize: '0.8rem' }}>
-                        {policy.source || 'ai_recommendation'}
-                      </td>
-                      <td style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>
-                        <button
-                          type="button"
-                          onClick={() => handleDeletePolicy(policy.id, policy.name)}
-                          style={{
-                            background: 'white',
-                            border: '1px solid #fca5a5',
-                            color: '#dc2626',
-                            padding: '0.3rem 0.65rem',
-                            borderRadius: '4px',
-                            fontSize: '0.8rem',
-                            fontWeight: '600',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          Deactivate
-                        </button>
-                      </td>
+            <div style={{ background: 'white', borderRadius: '8px', border: '1px solid #e2e8f0', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.03)' }}>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.88rem' }}>
+                  <thead style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
+                    <tr>
+                      <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Policy Name</th>
+                      <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Schema</th>
+                      <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Table</th>
+                      <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Column</th>
+                      <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Strategy</th>
+                      <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Sensitivity</th>
+                      <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Status</th>
+                      <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Source</th>
+                      <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569', textAlign: 'right' }}>Actions</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {policies.map((policy) => (
+                      <tr key={policy.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#0f172a' }}>
+                          {policy.name || `${policy.table_name}.${policy.column_name}`}
+                        </td>
+                        <td style={{ padding: '0.75rem 1rem', color: '#64748b' }}>
+                          <code>{policy.schema_name || 'public'}</code>
+                        </td>
+                        <td style={{ padding: '0.75rem 1rem' }}>
+                          <code>{policy.table_name}</code>
+                        </td>
+                        <td style={{ padding: '0.75rem 1rem' }}>
+                          <code style={{ color: '#2563eb', fontWeight: '600' }}>{policy.column_name}</code>
+                        </td>
+                        <td style={{ padding: '0.75rem 1rem' }}>
+                          <span className={getStrategyBadgeClass(policy.strategy)}>
+                            {policy.strategy}
+                          </span>
+                        </td>
+                        <td style={{ padding: '0.75rem 1rem' }}>
+                          <span className={getSensitivityBadgeClass(policy.sensitivity)}>
+                            {policy.sensitivity || 'MEDIUM'}
+                          </span>
+                        </td>
+                        <td style={{ padding: '0.75rem 1rem' }}>
+                          <span className="status-badge-approved">
+                            {policy.status || 'ACTIVE'}
+                          </span>
+                        </td>
+                        <td style={{ padding: '0.75rem 1rem', color: '#64748b', fontSize: '0.8rem' }}>
+                          {policy.source || 'ai_recommendation'}
+                        </td>
+                        <td style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>
+                          <button
+                            type="button"
+                            onClick={() => handleDeletePolicy(policy.id, policy.name)}
+                            style={{
+                              background: 'white',
+                              border: '1px solid #fca5a5',
+                              color: '#dc2626',
+                              padding: '0.3rem 0.65rem',
+                              borderRadius: '4px',
+                              fontSize: '0.8rem',
+                              fontWeight: '600',
+                              cursor: 'pointer',
+                              transition: 'all 0.15s ease',
+                            }}
+                          >
+                            Deactivate
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>

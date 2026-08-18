@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     MAX_DETECTION_CELL_LENGTH: int = 50
     LLM_DETECTION_TIMEOUT_SECONDS: int = 5
 
+    # Query Configuration
+    DEFAULT_QUERY_LIMIT: int = 100
+
     # Security (optional for MVP; no auth enabled)
     SECRET_KEY: Optional[str] = None
     ALGORITHM: str = "HS256"

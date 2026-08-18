@@ -54,6 +54,7 @@ class MaskingRecommendation(BaseModel):
     )
     data_type: Optional[str] = "text"
     sensitivity: str = "MEDIUM"
+    confidence: Optional[str] = "HIGH"
     recommended_strategy: str = Field(
         default="",
         validation_alias=AliasChoices("strategy", "recommended_strategy", "masking_strategy"),
@@ -68,7 +69,8 @@ class MaskingRecommendation(BaseModel):
 class MaskingRequest(BaseModel):
     """Request to apply masking to data."""
     schema_name: Optional[str] = "public"
-    table_name: str
+    table_name: Optional[str] = ""
+    tables: Optional[List[Dict[str, str]]] = None
     columns: List[str]
     data: List[List[Any]]
     policy_ids: Optional[List[int]] = None

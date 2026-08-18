@@ -36,10 +36,22 @@ class ColumnRecommendation(BaseModel):
     recommended_strategy: MaskingStrategyRecommendation = Field(
         description="Recommended masking strategy: NONE, REDACT, PARTIAL, EMAIL, PHONE_LAST4"
     )
+    confidence: Optional[ConfidenceLevel] = Field(
+        default=ConfidenceLevel.HIGH, description="Confidence level: HIGH, MEDIUM, LOW"
+    )
     rationale: Optional[str] = Field(default="", description="Brief reason for the recommendation")
     source: Optional[str] = Field(
         default="llm", description="Source of recommendation: 'llm' or 'heuristic_fallback'"
     )
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def normalize_confidence(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            v_upper = v.strip().upper()
+            if v_upper in ConfidenceLevel.__members__:
+                return ConfidenceLevel(v_upper)
+        return v
 
     @field_validator("sensitivity", mode="before")
     @classmethod

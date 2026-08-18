@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS masking_recommendations (
     column_name VARCHAR(100) NOT NULL,
     data_type VARCHAR(100) DEFAULT 'text',
     sensitivity VARCHAR(20) NOT NULL,
+    confidence VARCHAR(20) DEFAULT 'HIGH',
     recommended_strategy VARCHAR(50) NOT NULL,
     rationale TEXT,
     source VARCHAR(50) DEFAULT 'llm',
@@ -60,6 +61,7 @@ CREATE INDEX IF NOT EXISTS idx_masking_recommendations_status ON masking_recomme
 CREATE INDEX IF NOT EXISTS idx_masking_recommendations_table ON masking_recommendations(table_name);
 ALTER TABLE masking_recommendations ADD COLUMN IF NOT EXISTS schema_name VARCHAR(100) DEFAULT 'public';
 ALTER TABLE masking_recommendations ADD COLUMN IF NOT EXISTS data_type VARCHAR(100) DEFAULT 'text';
+ALTER TABLE masking_recommendations ADD COLUMN IF NOT EXISTS confidence VARCHAR(20) DEFAULT 'HIGH';
 ALTER TABLE masking_recommendations ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT 'llm';
 CREATE UNIQUE INDEX IF NOT EXISTS uq_active_masking_policy ON masking_policies (schema_name, table_name, column_name) WHERE is_active = TRUE AND status = 'ACTIVE';
 

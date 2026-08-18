@@ -254,6 +254,16 @@ class GeneralizationStrategy(MaskingStrategy):
         return isinstance(bin_size, (int, float)) and bin_size > 0
 
 
+class DoNotShowStrategy(MaskingStrategy):
+    """DO_NOT_SHOW strategy - column is excluded/hidden from query results."""
+
+    def mask(self, value: Any, parameters: Dict[str, Any]) -> Any:
+        return "[HIDDEN]"
+
+    def validate_parameters(self, parameters: Dict[str, Any]) -> bool:
+        return True
+
+
 class MaskingStrategyFactory:
     """Factory for creating masking strategy instances."""
 
@@ -262,6 +272,7 @@ class MaskingStrategyFactory:
     _partial_strategy = PartialMaskStrategy()
     _email_strategy = EmailMaskStrategy()
     _phone_strategy = PhoneMaskStrategy()
+    _donotshow_strategy = DoNotShowStrategy()
     _hash_strategy = HashStrategy()
     _ssn_strategy = SSNMaskStrategy()
     _credit_card_strategy = CreditCardMaskStrategy()
@@ -284,6 +295,10 @@ class MaskingStrategyFactory:
         "phone_mask": _phone_strategy,
         "phone_last4": _phone_strategy,
         "last4": _phone_strategy,
+        "do_not_show": _donotshow_strategy,
+        "donotshow": _donotshow_strategy,
+        "hide": _donotshow_strategy,
+        "hidden": _donotshow_strategy,
         # Extended strategies for backwards compatibility
         "hash": _hash_strategy,
         "ssn_mask": _ssn_strategy,
@@ -312,6 +327,7 @@ class MaskingStrategyFactory:
             "PARTIAL": "Preserve edge characters and mask middle characters",
             "EMAIL": "Mask local part of email address (e.g. j***@domain.com)",
             "PHONE_LAST4": "Mask phone number preserving last 4 digits",
+            "DO_NOT_SHOW": "Exclude column completely from query results",
             "redaction": "Replace with asterisks",
             "partial_mask": "Show first and last characters",
             "hash": "Replace with hash value",

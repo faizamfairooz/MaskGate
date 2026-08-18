@@ -186,6 +186,21 @@ class TestRecommendationReviewUnit:
             with pytest.raises(ValueError, match="An active masking policy already exists for patients.email"):
                 masking_service.approve_recommendation(107)
 
+    def test_approve_rejects_invalid_strategy(self, masking_service):
+        rec = MaskingRecommendation(
+            id=108,
+            schema_name="public",
+            table_name="patients",
+            column_name="email",
+            sensitivity="HIGH",
+            recommended_strategy="COMPLETELY_INVALID_STRATEGY",
+            status="PENDING",
+        )
+        with patch.object(masking_service.recommendation_repo, "get", return_value=rec), \
+             patch.object(masking_service, "validate_table_and_column"):
+            with pytest.raises(ValueError, match="Invalid masking strategy 'COMPLETELY_INVALID_STRATEGY'"):
+                masking_service.approve_recommendation(108)
+
     def test_get_all_policies_returns_only_active_policies(self, masking_service):
         with patch.object(masking_service.policy_manager, "get_all_policies") as mock_get_policies:
             active_policy = MaskingPolicy(
@@ -284,6 +299,7 @@ class TestRecommendationReviewAPI:
             assert data[0]["column_name"] == "email"
             assert data[0]["data_type"] == "varchar"
             assert data[0]["sensitivity"] == "HIGH"
+            assert data[0]["confidence"] == "HIGH"
             assert data[0]["recommended_strategy"] == "email_mask"
             assert data[0]["rationale"] == "PII email"
             assert data[0]["source"] == "llm"
@@ -394,3 +410,161 @@ class TestRecommendationReviewAPI:
             assert len(data) == 1
             assert data[0]["status"] == "PENDING"
             mock_queue.assert_called_once_with(schema_name="public", table_name="patients")
+
+    def test_api_approve_recommendation_invalid_strategy(self, client):
+        with patch(
+            "app.api.routes.masking.masking_service.approve_recommendation",
+            side_effect=ValueError("Invalid masking strategy 'UNKNOWN_STRAT'. Must be one of: ['EMAIL', 'PHONE_LAST4']"),
+        ):
+            response = client.post("/api/v1/masking/recommendations/1/approve")
+            assert response.status_code == 400
+            assert "Invalid masking strategy" in response.json()["detail"]
+
+
+class TestWorkflowApprovalRejectionE2E:
+    """End-to-end workflow tests for recommendation approval/rejection lifecycle."""
+
+    def test_approval_workflow_activates_deterministic_masking(self, client, masking_service):
+        from app.database.postgresql import db
+        from app.schemas.masking import MaskingRequest
+
+        # 1. Clean up existing active policy for patients.email if any
+        existing_policy = masking_service.policy_manager.find_active_policy("patients", "email")
+        if existing_policy:
+            masking_service.policy_manager.delete_policy(existing_policy.id)
+
+        # 2. Create a PENDING recommendation
+        rec = masking_service.recommendation_repo.create(
+            MaskingRecommendation(
+                schema_name="public",
+                table_name="patients",
+                column_name="email",
+                data_type="character varying",
+                sensitivity="HIGH",
+                recommended_strategy="EMAIL",
+                rationale="Protect patient emails",
+                source="llm",
+                status="PENDING",
+            )
+        )
+        assert rec.id is not None
+        assert rec.status == "PENDING"
+
+        # 3. Verify recommendation is visible in pending list
+        pending_list = masking_service.list_recommendations(status="PENDING", table_name="patients")
+        assert any(r.id == rec.id for r in pending_list)
+
+        # 4. Approve recommendation
+        approved_policy = masking_service.approve_recommendation(rec.id)
+        assert approved_policy.status == "ACTIVE"
+        assert approved_policy.is_active is True
+        assert approved_policy.strategy == "EMAIL"
+
+        # 5. Verify recommendation state updated to APPROVED
+        updated_rec = masking_service.recommendation_repo.get(rec.id)
+        assert updated_rec.status == "APPROVED"
+
+        # 6. Verify deterministic masking engine immediately applies the approved policy
+        test_data = [[1, "Alice", "alice.smith@example.com"]]
+        mask_result = masking_service.apply_masking(
+            MaskingRequest(
+                schema_name="public",
+                table_name="patients",
+                columns=["patient_id", "full_name", "email"],
+                data=test_data,
+                auto_detect=False,
+            )
+        )
+        masked_email = mask_result.masked_data[0][2]
+        assert masked_email != "alice.smith@example.com"
+        assert "@example.com" in masked_email
+        assert "***" in masked_email
+
+        # 7. Clean up created policy
+        if approved_policy.id:
+            masking_service.delete_policy(approved_policy.id)
+
+    def test_rejection_workflow_does_not_mask(self, client, masking_service):
+        from app.schemas.masking import MaskingRequest
+
+        # 1. Clean up existing active policy for patients.phone if any
+        existing_policy = masking_service.policy_manager.find_active_policy("patients", "phone")
+        if existing_policy:
+            masking_service.policy_manager.delete_policy(existing_policy.id)
+
+        # 2. Create a PENDING recommendation
+        rec = masking_service.recommendation_repo.create(
+            MaskingRecommendation(
+                schema_name="public",
+                table_name="patients",
+                column_name="phone",
+                data_type="character varying",
+                sensitivity="HIGH",
+                recommended_strategy="PHONE_LAST4",
+                rationale="Phone number",
+                source="llm",
+                status="PENDING",
+            )
+        )
+        assert rec.id is not None
+
+        # 3. Reject recommendation
+        rejected_rec = masking_service.reject_recommendation(rec.id)
+        assert rejected_rec.status == "REJECTED"
+
+        # 4. Verify no active policy exists
+        active_policy = masking_service.policy_manager.find_active_policy("patients", "phone")
+        assert active_policy is None
+
+        # 5. Verify deterministic masking leaves data unmasked
+        test_data = [[1, "555-987-6543"]]
+        mask_result = masking_service.apply_masking(
+            MaskingRequest(
+                schema_name="public",
+                table_name="patients",
+                columns=["patient_id", "phone"],
+                data=test_data,
+                auto_detect=False,
+            )
+        )
+        assert mask_result.masked_data[0][1] == "555-987-6543"
+
+    def test_approval_rejects_invalid_table_or_column(self, masking_service):
+        # Create recommendation with non-existent table
+        bad_table_rec = masking_service.recommendation_repo.create(
+            MaskingRecommendation(
+                schema_name="public",
+                table_name="nonexistent_xyz_tbl",
+                column_name="some_col",
+                recommended_strategy="EMAIL",
+                status="PENDING",
+            )
+        )
+        with pytest.raises(ValueError, match="does not exist"):
+            masking_service.approve_recommendation(bad_table_rec.id)
+
+        # Create recommendation with non-existent column
+        bad_col_rec = masking_service.recommendation_repo.create(
+            MaskingRecommendation(
+                schema_name="public",
+                table_name="patients",
+                column_name="nonexistent_xyz_col",
+                recommended_strategy="EMAIL",
+                status="PENDING",
+            )
+        )
+        with pytest.raises(ValueError, match="does not exist"):
+            masking_service.approve_recommendation(bad_col_rec.id)
+
+    def test_approval_rejects_invalid_strategy(self, masking_service):
+        bad_strat_rec = masking_service.recommendation_repo.create(
+            MaskingRecommendation(
+                schema_name="public",
+                table_name="patients",
+                column_name="email",
+                recommended_strategy="INVALID_CUSTOM_STRATEGY",
+                status="PENDING",
+            )
+        )
+        with pytest.raises(ValueError, match="Invalid masking strategy"):
+            masking_service.approve_recommendation(bad_strat_rec.id)
