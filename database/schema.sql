@@ -20,12 +20,14 @@ CREATE TABLE IF NOT EXISTS masking_policies (
     id SERIAL PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
     description TEXT,
+    schema_name VARCHAR(100) DEFAULT 'public',
     table_name VARCHAR(100) NOT NULL,
     column_name VARCHAR(100) NOT NULL,
     strategy VARCHAR(50) NOT NULL,
+    sensitivity VARCHAR(20) DEFAULT 'MEDIUM',
     parameters JSONB DEFAULT '{}',
-    status VARCHAR(20) DEFAULT 'approved',
-    source VARCHAR(30) DEFAULT 'manual',
+    status VARCHAR(20) DEFAULT 'ACTIVE',
+    source VARCHAR(30) DEFAULT 'ai_recommendation',
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -33,21 +35,33 @@ CREATE TABLE IF NOT EXISTS masking_policies (
     UNIQUE(table_name, column_name)
 );
 
+ALTER TABLE masking_policies ADD COLUMN IF NOT EXISTS schema_name VARCHAR(100) DEFAULT 'public';
+ALTER TABLE masking_policies ADD COLUMN IF NOT EXISTS sensitivity VARCHAR(20) DEFAULT 'MEDIUM';
+ALTER TABLE masking_policies ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'ACTIVE';
+ALTER TABLE masking_policies ADD COLUMN IF NOT EXISTS source VARCHAR(30) DEFAULT 'ai_recommendation';
+
 -- AI masking recommendations (pending admin review)
 CREATE TABLE IF NOT EXISTS masking_recommendations (
     id SERIAL PRIMARY KEY,
+    schema_name VARCHAR(100) DEFAULT 'public',
     table_name VARCHAR(100) NOT NULL,
     column_name VARCHAR(100) NOT NULL,
+    data_type VARCHAR(100) DEFAULT 'text',
     sensitivity VARCHAR(20) NOT NULL,
     recommended_strategy VARCHAR(50) NOT NULL,
     rationale TEXT,
-    status VARCHAR(20) DEFAULT 'pending',
+    source VARCHAR(50) DEFAULT 'llm',
+    status VARCHAR(20) DEFAULT 'PENDING',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_masking_recommendations_status ON masking_recommendations(status);
 CREATE INDEX IF NOT EXISTS idx_masking_recommendations_table ON masking_recommendations(table_name);
+ALTER TABLE masking_recommendations ADD COLUMN IF NOT EXISTS schema_name VARCHAR(100) DEFAULT 'public';
+ALTER TABLE masking_recommendations ADD COLUMN IF NOT EXISTS data_type VARCHAR(100) DEFAULT 'text';
+ALTER TABLE masking_recommendations ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT 'llm';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_active_masking_policy ON masking_policies (schema_name, table_name, column_name) WHERE is_active = TRUE AND status = 'ACTIVE';
 
 -- Query history table
 CREATE TABLE IF NOT EXISTS query_history (

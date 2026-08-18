@@ -1,14 +1,20 @@
 from typing import Any, Dict, List, Optional
+import re
+import logging
 
 from app.ai.llm import llm_client
-from app.database.repositories import RecommendationRepository
+from app.ai.llm_schemas import (
+    ColumnRecommendation,
+    SensitivityLevel,
+    MaskingStrategyRecommendation,
+)
 from app.schemas.database import ColumnSchema
-from app.schemas.masking import MaskingRecommendation
-import re
+
+logger = logging.getLogger(__name__)
 
 
 class SchemaAnalyzer:
-    """Analyzes database schemas to identify patterns and sensitive data."""
+    """Analyzes database schema metadata to identify sensitive columns and recommend masking strategies."""
 
     SENSITIVE_PATTERNS = {
         "email": r"email|mail",
@@ -20,26 +26,37 @@ class SchemaAnalyzer:
         "name": r"name|first_name|last_name|full_name",
         "dob": r"dob|birth|birthday",
         "income": r"income|salary|wage",
-        "ip": r"ip_address|ip",
+        "ip": r"ip_address|\bip\b",
         "account": r"account|account_number",
     }
 
     SENSITIVITY_MAP = {
-        "email": "high",
-        "phone": "high",
-        "ssn": "high",
-        "credit_card": "high",
-        "password": "high",
-        "address": "high",
-        "name": "medium",
-        "dob": "high",
-        "income": "medium",
-        "ip": "medium",
-        "account": "high",
+        "email": SensitivityLevel.HIGH,
+        "phone": SensitivityLevel.HIGH,
+        "ssn": SensitivityLevel.HIGH,
+        "credit_card": SensitivityLevel.HIGH,
+        "password": SensitivityLevel.HIGH,
+        "address": SensitivityLevel.HIGH,
+        "name": SensitivityLevel.MEDIUM,
+        "dob": SensitivityLevel.HIGH,
+        "income": SensitivityLevel.MEDIUM,
+        "ip": SensitivityLevel.MEDIUM,
+        "account": SensitivityLevel.HIGH,
     }
 
-    def __init__(self, recommendation_repo: Optional[RecommendationRepository] = None):
-        self.recommendation_repo = recommendation_repo or RecommendationRepository()
+    STRATEGY_MAP = {
+        "email": MaskingStrategyRecommendation.EMAIL,
+        "phone": MaskingStrategyRecommendation.PHONE_LAST4,
+        "ssn": MaskingStrategyRecommendation.REDACT,
+        "credit_card": MaskingStrategyRecommendation.REDACT,
+        "password": MaskingStrategyRecommendation.REDACT,
+        "name": MaskingStrategyRecommendation.PARTIAL,
+        "address": MaskingStrategyRecommendation.PARTIAL,
+        "dob": MaskingStrategyRecommendation.PARTIAL,
+        "income": MaskingStrategyRecommendation.PARTIAL,
+        "ip": MaskingStrategyRecommendation.PARTIAL,
+        "account": MaskingStrategyRecommendation.REDACT,
+    }
 
     def detect_sensitive_columns(self, columns: List[ColumnSchema]) -> List[str]:
         sensitive_columns = []
@@ -73,75 +90,93 @@ class SchemaAnalyzer:
                             "type": data_type_pattern,
                             "recommendation": self.suggest_masking_strategy(
                                 column.column_name, column.data_type
-                            ),
+                            ).value,
                         }
                     )
                     break
 
         return analysis
 
-    def analyze_and_persist_recommendations(
+    def analyze_table_schema(
         self, table_name: str, columns: List[ColumnSchema]
-    ) -> List[MaskingRecommendation]:
-        """Rule-based + optional LLM recommendations stored as pending."""
-        saved: List[MaskingRecommendation] = []
-        llm_result = llm_client.analyze_schema_metadata(
-            table_name,
-            [(c.column_name, c.data_type) for c in columns],
-        )
+    ) -> List[ColumnRecommendation]:
+        """
+        Analyze table schema metadata via LangChain LLM with fallback to deterministic heuristics.
+        
+        Cross-validates every recommendation against actual table schema columns.
+        Never sends database row values to the LLM.
+        """
+        if not columns:
+            return []
 
-        if llm_result and llm_result.recommendations:
-            for item in llm_result.recommendations:
-                rec = MaskingRecommendation(
-                    table_name=table_name,
-                    column_name=item.column,
-                    sensitivity=str(item.sensitivity.value if hasattr(item.sensitivity, 'value') else item.sensitivity),
-                    recommended_strategy=item.recommended_strategy,
-                    rationale=item.rationale,
-                    status="pending",
-                )
-                saved.append(self.recommendation_repo.create(rec))
-            return saved
+        known_columns = {col.column_name: col.data_type for col in columns}
+        safe_meta = [(col.column_name, col.data_type) for col in columns]
 
+        # 1. Attempt LLM analysis if available
+        if llm_client.is_available():
+            try:
+                llm_result = llm_client.analyze_schema_metadata(table_name, safe_meta)
+                if llm_result and llm_result.recommendations:
+                    valid_recs: List[ColumnRecommendation] = []
+                    for item in llm_result.recommendations:
+                        # Schema cross-validation: reject hallucinated or nonexistent columns
+                        if item.column not in known_columns:
+                            logger.warning(
+                                f"Rejected LLM recommendation for nonexistent column: {item.column} in table {table_name}"
+                            )
+                            continue
+                        
+                        item.table = table_name
+                        item.data_type = known_columns[item.column]
+                        item.source = "llm"
+                        valid_recs.append(item)
+
+                    if valid_recs:
+                        return valid_recs
+            except Exception as e:
+                logger.warning(f"LLM schema analysis failed: {e}. Falling back to heuristics.")
+
+        # 2. Deterministic heuristic fallback
+        return self.heuristic_analysis(table_name, columns)
+
+    def heuristic_analysis(
+        self, table_name: str, columns: List[ColumnSchema]
+    ) -> List[ColumnRecommendation]:
+        """Deterministic pattern-based recommendation fallback."""
+        recommendations: List[ColumnRecommendation] = []
         for column in columns:
             column_lower = column.column_name.lower()
+            matched_type = None
             for data_type_pattern, pattern in self.SENSITIVE_PATTERNS.items():
                 if re.search(pattern, column_lower):
-                    rec = MaskingRecommendation(
-                        table_name=table_name,
-                        column_name=column.column_name,
-                        sensitivity=self.SENSITIVITY_MAP.get(data_type_pattern, "medium"),
-                        recommended_strategy=self.suggest_masking_strategy(
-                            column.column_name, column.data_type
-                        ),
-                        rationale=f"Column name matches {data_type_pattern} pattern",
-                        status="pending",
-                    )
-                    saved.append(self.recommendation_repo.create(rec))
+                    matched_type = data_type_pattern
                     break
 
-        return saved
+            if matched_type:
+                sensitivity = self.SENSITIVITY_MAP.get(matched_type, SensitivityLevel.MEDIUM)
+                strategy = self.STRATEGY_MAP.get(matched_type, MaskingStrategyRecommendation.REDACT)
+                recommendations.append(
+                    ColumnRecommendation(
+                        table=table_name,
+                        column=column.column_name,
+                        sensitivity=sensitivity,
+                        data_type=column.data_type,
+                        recommended_strategy=strategy,
+                        rationale=f"Column name matches {matched_type} pattern",
+                        source="heuristic_fallback",
+                    )
+                )
+        return recommendations
 
-    def suggest_masking_strategy(self, column_name: str, data_type: str) -> str:
+    def suggest_masking_strategy(
+        self, column_name: str, data_type: str
+    ) -> MaskingStrategyRecommendation:
         column_lower = column_name.lower()
-        strategy_mapping = {
-            "email": "email_mask",
-            "phone": "phone_mask",
-            "ssn": "ssn_mask",
-            "credit_card": "credit_card_mask",
-            "password": "hash",
-            "name": "partial_mask",
-            "address": "partial_mask",
-            "dob": "date_mask",
-            "income": "generalization",
-        }
-
         for data_type_pattern, pattern in self.SENSITIVE_PATTERNS.items():
             if re.search(pattern, column_lower):
-                return strategy_mapping.get(data_type_pattern, "redaction")
+                return self.STRATEGY_MAP.get(data_type_pattern, MaskingStrategyRecommendation.REDACT)
 
         if "char" in data_type.lower() or "text" in data_type.lower():
-            return "redaction"
-        if "int" in data_type.lower() or "numeric" in data_type.lower():
-            return "noise_addition"
-        return "redaction"
+            return MaskingStrategyRecommendation.REDACT
+        return MaskingStrategyRecommendation.NONE
+

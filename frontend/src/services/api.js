@@ -25,11 +25,11 @@ export const schemaAPI = {
 
 export const maskingAPI = {
   getStrategies: () => api.get('/masking/strategies'),
-  getPolicies: () => api.get('/masking/policies'),
+  getPolicies: (status = 'ACTIVE') => api.get('/masking/policies', { params: { status } }),
   getPolicy: (id) => api.get(`/masking/policies/${id}`),
-  createPolicy: (data) => api.post('/masking/policies', data),
   deletePolicy: (id) => api.delete(`/masking/policies/${id}`),
   getRecommendations: (params) => api.get('/masking/recommendations', { params }),
+  analyzeAndQueue: (data = {}) => api.post('/masking/recommendations/analyze-and-queue', data),
   approveRecommendation: (id) => api.post(`/masking/recommendations/${id}/approve`),
   rejectRecommendation: (id) => api.post(`/masking/recommendations/${id}/reject`),
   applyMasking: (data) => api.post('/masking/apply', data)

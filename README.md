@@ -175,34 +175,68 @@ This keeps the administrator in control of the final masking configuration.
 
 ---
 
-# 🔐 Dynamic Data Masking
+# 🔐 Deterministic Dynamic Data Masking
 
-Approved masking policies are applied to query results before they are returned to the developer.
+MaskGate provides high-performance, deterministic query-result masking based on approved `ACTIVE` masking policies.
 
-The original PostgreSQL data is not modified.
+```text
+Database
+    ↓
+Query
+    ↓
+Active Policy
+    ↓
+Masking Engine (Pure Python)
+    ↓
+Masked Result
+    ↓
+Client
+```
 
-### Example
+### Core Security Guarantee: Zero Database Mutation
 
-Original:
+> **MaskGate does not modify the original database value. Masking is applied to query results before they are returned to the client.**
 
+### Supported Deterministic Strategies
+
+| Strategy | Description | Example Input | Example Output |
+| :--- | :--- | :--- | :--- |
+| `NONE` | Returns original value without modifications | `12345` | `12345` |
+| `REDACT` | Replaces entire string/value with asterisks | `Confidential` | `************` |
+| `PARTIAL` | Preserves outer characters while masking center | `sensitive_text` | `se**********xt` |
+| `EMAIL` | Preserves first character and domain, masks local part | `john.smith@gmail.com` | `j***@gmail.com` |
+| `PHONE_LAST4` | Preserves only the last 4 digits of phone numbers | `0771234567` | `******4567` |
+
+### Deterministic Masking Examples
+
+**Database value:**
 ```text
 john.smith@gmail.com
 ```
 
-Developer receives:
+**Policy:**
+```text
+EMAIL
+```
 
+**Returned value:**
 ```text
 j***@gmail.com
 ```
 
-Original:
+---
 
+**Database value:**
 ```text
 0771234567
 ```
 
-Developer receives:
+**Policy:**
+```text
+PHONE_LAST4
+```
 
+**Returned value:**
 ```text
 ******4567
 ```

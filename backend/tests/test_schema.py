@@ -182,8 +182,11 @@ def test_api_analyze_schema_endpoint(client):
     data = response.json()
     assert isinstance(data, list)
     assert len(data) > 0
-    # Check that recommendations have table_name and column_name
-    assert all(r["table_name"] == "patients" for r in data)
-    assert any(r["column_name"] == "email" for r in data)
+    # Check that recommendations have table and column
+    assert all(r["table"] == "patients" for r in data)
+    assert any(r["column"] == "email" for r in data)
+    email_rec = next(r for r in data if r["column"] == "email")
+    assert email_rec["sensitivity"] in ["HIGH", "MEDIUM", "LOW"]
+    assert email_rec["recommended_strategy"] in ["NONE", "REDACT", "PARTIAL", "EMAIL", "PHONE_LAST4"]
 
 

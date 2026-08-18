@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Any, Optional
+from typing import List, Any, Optional, Tuple
 import hashlib
 import re
 import time
@@ -11,7 +11,7 @@ from app.schemas.masking import MaskingRequest
 
 
 class QueryService:
-    """Service for executing SQL queries with optional data masking."""
+    """Service for executing SQL queries with deterministic data masking."""
 
     DANGEROUS_KEYWORDS = (
         "DROP",
@@ -60,16 +60,24 @@ class QueryService:
         llm_detection_summary = None
 
         if apply_masking or mask_suspicious:
-            from app.ai.llm import llm_client
-            llm_detection_enabled = llm_client.is_available() and mask_suspicious
+            from app.config.settings import settings
+            schema_name, table_name = self._extract_table_and_schema(query)
+
+            runtime_enabled = getattr(settings, "ENABLE_RUNTIME_DETECTION", True)
+            effective_auto_detect = mask_suspicious and runtime_enabled
+
+            if effective_auto_detect:
+                from app.ai.llm import llm_client
+                llm_detection_enabled = llm_client.is_available()
 
             masking_result = self.masking_service.apply_masking(
                 MaskingRequest(
-                    table_name=self._extract_table_name(query),
+                    schema_name=schema_name,
+                    table_name=table_name,
                     columns=columns,
                     data=rows,
                     policy_ids=[] if not apply_masking else None,
-                    auto_detect=mask_suspicious,
+                    auto_detect=effective_auto_detect,
                 )
             )
             masked_data = masking_result.masked_data
@@ -77,7 +85,7 @@ class QueryService:
             runtime_summary = masking_result.runtime_detection_summary
 
             # Extract LLM-specific summary if available
-            if runtime_summary and "LLM detection" in runtime_summary:
+            if runtime_summary and "LLM" in runtime_summary:
                 llm_detection_summary = runtime_summary
 
         execution_time = time.time() - start_time
@@ -130,13 +138,27 @@ class QueryService:
     def get_query_history(self, limit: int = 10) -> List[QueryHistory]:
         return self.query_history[-limit:]
 
-    def _extract_table_name(self, query: str) -> str:
+    def _extract_table_and_schema(self, query: str) -> Tuple[str, str]:
+        """
+        Extract schema_name and table_name from simple SELECT queries.
+        Supports:
+          - table
+          - schema.table
+        """
         query_upper = query.upper()
         if "FROM" in query_upper:
             from_idx = query_upper.index("FROM") + 4
             table_part = query[from_idx:].strip().split()[0]
-            return table_part.replace(";", "").replace('"', "").replace("'", "")
-        return "unknown"
+            clean_part = table_part.replace(";", "").replace('"', "").replace("'", "")
+            if "." in clean_part:
+                schema_name, table_name = clean_part.split(".", 1)
+                return schema_name.strip(), table_name.strip()
+            return "public", clean_part.strip()
+        return "public", "unknown"
+
+    def _extract_table_name(self, query: str) -> str:
+        _, table_name = self._extract_table_and_schema(query)
+        return table_name
 
     def _generate_query_hash(self, query: str) -> str:
         return hashlib.md5(query.encode()).hexdigest()

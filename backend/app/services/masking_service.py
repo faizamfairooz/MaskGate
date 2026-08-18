@@ -1,6 +1,7 @@
 import time
 from typing import Any, Dict, List, Optional
 
+from app.database.postgresql import db
 from app.database.repositories import RecommendationRepository
 from app.masking.engine import MaskingEngine
 from app.masking.policies import PolicyManager
@@ -13,37 +14,30 @@ from app.schemas.masking import (
 
 
 class MaskingService:
-    """Service for managing and applying data masking policies."""
+    """Service for managing AI recommendations and approved masking policies."""
 
     def __init__(self):
         self.engine = MaskingEngine()
         self.policy_manager = PolicyManager()
         self.recommendation_repo = RecommendationRepository()
 
-    def create_policy(
-        self,
-        name: str,
-        description: str,
-        table_name: str,
-        column_name: str,
-        strategy: str,
-        parameters: Optional[Dict[str, Any]] = None,
-        source: str = "manual",
-    ) -> MaskingPolicy:
-        policy = MaskingPolicy(
-            name=name,
-            description=description,
-            table_name=table_name,
-            column_name=column_name,
-            strategy=strategy,
-            parameters=parameters or {},
-            source=source,
-            status="approved",
-        )
-        return self.policy_manager.create_policy(policy)
+    def validate_table_and_column(
+        self, table_name: str, column_name: str, schema_name: str = "public"
+    ) -> None:
+        """Validate that the target schema, table, and column exist in PostgreSQL."""
+        if not db.table_exists(table_name, schema=schema_name):
+            raise ValueError(f"Table '{table_name}' does not exist in schema '{schema_name}'")
 
-    def get_all_policies(self) -> List[MaskingPolicy]:
-        return self.policy_manager.get_all_policies()
+        table_columns = db.get_table_schema(table_name, schema=schema_name)
+        existing_cols = {col["column_name"] for col in table_columns}
+        if column_name not in existing_cols:
+            raise ValueError(
+                f"Column '{column_name}' does not exist in table '{table_name}' (schema '{schema_name}')"
+            )
+
+    def get_all_policies(self, status: Optional[str] = "ACTIVE") -> List[MaskingPolicy]:
+        """Retrieve all active masking policies."""
+        return self.policy_manager.get_all_policies(status=status)
 
     def get_policy(self, policy_id: int) -> Optional[MaskingPolicy]:
         return self.policy_manager.get_policy(policy_id)
@@ -55,35 +49,121 @@ class MaskingService:
         self,
         status: Optional[str] = None,
         table_name: Optional[str] = None,
+        schema_name: Optional[str] = None,
     ) -> List[MaskingRecommendation]:
-        return self.recommendation_repo.list_recommendations(status=status, table_name=table_name)
+        return self.recommendation_repo.list_recommendations(
+            status=status, table_name=table_name, schema_name=schema_name
+        )
 
     def approve_recommendation(self, rec_id: int) -> MaskingPolicy:
+        """
+        Approve a pending recommendation:
+        1. Verify recommendation exists and is PENDING.
+        2. Validate table and column exist in PostgreSQL.
+        3. Verify no active duplicate policy already exists.
+        4. Create ACTIVE MaskingPolicy.
+        5. Update recommendation status to APPROVED.
+        """
         rec = self.recommendation_repo.get(rec_id)
         if rec is None:
             raise ValueError(f"Recommendation {rec_id} not found")
-        if rec.status != "pending":
-            raise ValueError(f"Recommendation {rec_id} is not pending")
+        if rec.status.upper() != "PENDING":
+            raise ValueError(f"Recommendation {rec_id} is not pending (current status: {rec.status})")
 
-        policy = self.create_policy(
+        target_schema = rec.schema_name or "public"
+        self.validate_table_and_column(rec.table_name, rec.column_name, schema_name=target_schema)
+
+        existing_active = self.policy_manager.find_active_policy(
+            table_name=rec.table_name, column_name=rec.column_name, schema_name=target_schema
+        )
+        if existing_active:
+            raise ValueError(
+                f"An active masking policy already exists for {rec.table_name}.{rec.column_name}"
+            )
+
+        policy = MaskingPolicy(
             name=f"{rec.table_name}.{rec.column_name}",
             description=rec.rationale or "Approved AI recommendation",
+            schema_name=target_schema,
             table_name=rec.table_name,
             column_name=rec.column_name,
             strategy=rec.recommended_strategy,
+            sensitivity=rec.sensitivity,
+            parameters={},
+            status="ACTIVE",
             source="ai_recommendation",
+            is_active=True,
         )
-        self.recommendation_repo.update_status(rec_id, "approved")
-        return policy
+        created_policy = self.policy_manager.create_policy(policy)
+        self.recommendation_repo.update_status(rec_id, "APPROVED")
+        return created_policy
 
     def reject_recommendation(self, rec_id: int) -> MaskingRecommendation:
+        """
+        Reject a pending recommendation:
+        1. Verify recommendation exists and is PENDING.
+        2. Update status to REJECTED.
+        3. Never create a policy.
+        """
         rec = self.recommendation_repo.get(rec_id)
         if rec is None:
             raise ValueError(f"Recommendation {rec_id} not found")
-        updated = self.recommendation_repo.update_status(rec_id, "rejected")
+        if rec.status.upper() != "PENDING":
+            raise ValueError(f"Recommendation {rec_id} is not pending (current status: {rec.status})")
+
+        updated = self.recommendation_repo.update_status(rec_id, "REJECTED")
         if updated is None:
             raise ValueError(f"Recommendation {rec_id} not found")
         return updated
+
+    def analyze_and_queue_recommendations(
+        self, schema_name: str = "public", table_name: Optional[str] = None
+    ) -> List[MaskingRecommendation]:
+        """
+        Trigger AI/heuristic schema analysis and persist structured recommendations
+        as PENDING records in PostgreSQL for administrator review.
+        """
+        from app.services.schema_service import SchemaService
+        from app.ai.schema_analyzer import SchemaAnalyzer
+
+        schema_service = SchemaService()
+        schema_analyzer = SchemaAnalyzer()
+
+        target_tables = (
+            [table_name] if table_name else schema_service.get_all_tables(schema=schema_name)
+        )
+        queued: List[MaskingRecommendation] = []
+
+        for tbl in target_tables:
+            table_schema = schema_service.get_table_schema(tbl, schema=schema_name)
+            analysis_recs = schema_analyzer.analyze_table_schema(tbl, table_schema.columns)
+
+            for col_rec in analysis_recs:
+                sensitivity_str = (
+                    col_rec.sensitivity.value
+                    if hasattr(col_rec.sensitivity, "value")
+                    else str(col_rec.sensitivity)
+                )
+                strategy_str = (
+                    col_rec.recommended_strategy.value
+                    if hasattr(col_rec.recommended_strategy, "value")
+                    else str(col_rec.recommended_strategy)
+                )
+                rec = MaskingRecommendation(
+                    schema_name=schema_name,
+                    table_name=tbl,
+                    column_name=col_rec.column,
+                    data_type=col_rec.data_type,
+                    sensitivity=sensitivity_str,
+                    recommended_strategy=strategy_str,
+                    rationale=col_rec.rationale or "",
+                    source=col_rec.source or "llm",
+                    status="PENDING",
+                )
+                saved = self.recommendation_repo.create(rec)
+                queued.append(saved)
+
+        return queued
 
     def get_available_strategies(self) -> Dict[str, str]:
         return self.engine.strategy_factory.get_available_strategies()
@@ -98,8 +178,9 @@ class MaskingService:
                 if p:
                     policies.append(p)
         else:
+            schema = getattr(request, "schema_name", None) or "public"
             policies = self.policy_manager.get_policies_for_table(
-                request.table_name, request.columns
+                request.table_name, request.columns, schema_name=schema
             )
 
         masked_data, masked_columns, runtime_summary = self.engine.apply_masking(

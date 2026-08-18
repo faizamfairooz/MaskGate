@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     LLM_MODEL: str = "gpt-4"
     LLM_TEMPERATURE: float = 0.3
 
+    # Runtime Detection Configuration
+    ENABLE_RUNTIME_DETECTION: bool = True
+    MAX_DETECTION_SAMPLE_ROWS: int = 5
+    MAX_DETECTION_CELL_LENGTH: int = 50
+    LLM_DETECTION_TIMEOUT_SECONDS: int = 5
+
     # Security (optional for MVP; no auth enabled)
     SECRET_KEY: Optional[str] = None
     ALGORITHM: str = "HS256"

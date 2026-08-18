@@ -16,11 +16,18 @@ class PolicyManager:
     def get_policy(self, policy_id: int) -> Optional[MaskingPolicy]:
         return self._repo.get_policy(policy_id)
 
-    def get_all_policies(self) -> List[MaskingPolicy]:
-        return self._repo.get_all_policies()
+    def find_active_policy(
+        self, table_name: str, column_name: str, schema_name: str = "public"
+    ) -> Optional[MaskingPolicy]:
+        return self._repo.find_active_policy(table_name, column_name, schema_name)
+
+    def get_all_policies(self, status: Optional[str] = "ACTIVE") -> List[MaskingPolicy]:
+        return self._repo.get_all_policies(status=status)
 
     def delete_policy(self, policy_id: int) -> bool:
         return self._repo.delete_policy(policy_id)
 
-    def get_policies_for_table(self, table_name: str, columns: List[str]) -> List[MaskingPolicy]:
-        return self._repo.get_policies_for_table(table_name, columns)
+    def get_policies_for_table(
+        self, table_name: str, columns: List[str], schema_name: str = "public"
+    ) -> List[MaskingPolicy]:
+        return self._repo.get_policies_for_table(table_name, columns, schema_name)

@@ -1,17 +1,15 @@
+import copy
 from typing import List, Any, Optional, Set, Tuple
 
-from app.ai.llm import llm_client
-from app.ai.sensitive_data_detector import SensitiveDataDetector
 from app.schemas.masking import MaskingPolicy
 from app.masking.strategies import MaskingStrategyFactory
 
 
 class MaskingEngine:
-    """Engine for applying masking strategies to data."""
+    """Deterministic data masking engine for query results."""
 
     def __init__(self):
         self.strategy_factory = MaskingStrategyFactory()
-        self.detector = SensitiveDataDetector()
 
     def apply_masking(
         self,
@@ -20,26 +18,59 @@ class MaskingEngine:
         policies: List[MaskingPolicy],
         auto_detect: bool = False,
     ) -> Tuple[List[List[Any]], List[str], Optional[str]]:
-        if not data:
-            return data, [], None
+        """
+        Apply active deterministic masking policies to query result rows in-memory.
+        Does not mutate the original data list.
+        """
+        if not data or not columns:
+            return [list(row) for row in data] if data else [], [], None
 
-        masked_data = [row[:] for row in data]
+        # Guarantee zero mutation of the input dataset
+        masked_data = [list(row) for row in data]
         masked_columns: Set[str] = set()
-        policy_columns = {p.column_name for p in policies}
 
-        for policy in policies:
-            if policy.column_name not in columns:
+        # Build column index lookup (case-insensitive for robust SQL column matching)
+        col_name_to_indices = {}
+        for idx, col in enumerate(columns):
+            norm_col = col.strip().lower()
+            if norm_col not in col_name_to_indices:
+                col_name_to_indices[norm_col] = []
+            col_name_to_indices[norm_col].append(idx)
+
+        # Filter strictly active policies
+        active_policies = [
+            p for p in policies
+            if getattr(p, "is_active", True) and (getattr(p, "status", "ACTIVE") or "").upper() == "ACTIVE"
+        ]
+
+        for policy in active_policies:
+            policy_col_norm = (policy.column_name or "").strip().lower()
+            if policy_col_norm not in col_name_to_indices:
                 continue
-            col_idx = columns.index(policy.column_name)
-            strategy = self.strategy_factory.get_strategy(policy.strategy)
+
+            target_indices = col_name_to_indices[policy_col_norm]
+            try:
+                strategy = self.strategy_factory.get_strategy(policy.strategy)
+            except ValueError:
+                # If strategy is unrecognized, skip safely without breaking query execution
+                continue
+
             for row in masked_data:
-                row[col_idx] = strategy.mask(row[col_idx], policy.parameters or {})
-            masked_columns.add(policy.column_name)
+                for col_idx in target_indices:
+                    if col_idx < len(row):
+                        try:
+                            row[col_idx] = strategy.mask(row[col_idx], policy.parameters or {})
+                        except Exception:
+                            # Graceful fallback on unexpected error
+                            pass
+
+            for col_idx in target_indices:
+                masked_columns.add(columns[col_idx])
 
         runtime_summary = None
         if auto_detect:
             runtime_summary = self._apply_runtime_detection(
-                masked_data, columns, policy_columns, masked_columns
+                masked_data, columns, {p.column_name for p in active_policies}, masked_columns
             )
 
         return masked_data, list(masked_columns), runtime_summary
@@ -52,76 +83,89 @@ class MaskingEngine:
         masked_columns: Set[str],
     ) -> Optional[str]:
         """
-        Apply runtime sensitive data detection as a secondary safety layer.
-        First applies pattern matching, then uses LLM for deeper analysis.
+        Stage 2 runtime detection layer when auto_detect is enabled.
+        Executes local regex detection at the cell level.
         """
-        column_stats = []
-        already_masked = list(masked_columns)
+        try:
+            from app.config.settings import settings
+            if not getattr(settings, "ENABLE_RUNTIME_DETECTION", True):
+                return None
 
-        # Phase 1: Pattern-based detection for columns not covered by policies
-        for col_idx, column in enumerate(columns):
-            if column in policy_columns:
-                continue
-            column_values = [row[col_idx] for row in masked_data]
-            risks = self.detector._analyze_column(column, column_values)
-            if risks["risk_level"] > 0:
-                strategy_name = self.detector.get_masking_recommendations(
-                    column, risks["detected_types"]
-                )[0]
-                strategy = self.strategy_factory.get_strategy(strategy_name)
-                for row in masked_data:
-                    row[col_idx] = strategy.mask(row[col_idx], {})
-                masked_columns.add(column)
-                column_stats.append(
-                    {
-                        "column": column,
-                        "detected_types": risks["detected_types"],
-                        "risk_level": risks["risk_level"],
-                        "detection_method": "pattern_matching"
-                    }
-                )
+            from app.ai.sensitive_data_detector import SensitiveDataDetector
 
-        # Phase 2: LLM-based detection for additional sensitive data
-        # This finds sensitive data that pattern matching missed
-        llm_result, llm_operations = self.detector.detect_runtime_sensitive_data(
-            masked_data, columns, already_masked
-        )
+            detector = SensitiveDataDetector()
 
-        if llm_result and llm_operations:
-            for row_idx, col_idx, strategy_name in llm_operations:
-                column = columns[col_idx]
-                if column not in masked_columns:  # Don't re-mask already masked columns
+            # Normalized set of columns already masked in Stage 1
+            norm_policy_columns = {p.strip().lower() for p in policy_columns if p}
+
+            # Identify unmasked column indices
+            unmasked_col_indices = [
+                idx for idx, col in enumerate(columns)
+                if col.strip().lower() not in norm_policy_columns
+            ]
+
+            if not unmasked_col_indices:
+                return None
+
+            # Stage 2A: Local regex detection (Cell-Level)
+            local_detected_cells = detector.detect_local_cells(
+                masked_data, columns, unmasked_col_indices=unmasked_col_indices
+            )
+
+            pattern_cell_count = 0
+            detected_types = set()
+
+            for row_idx, col_idx, data_type, strategy_name in local_detected_cells:
+                if row_idx < len(masked_data) and col_idx < len(masked_data[row_idx]):
                     try:
                         strategy = self.strategy_factory.get_strategy(strategy_name)
                         masked_data[row_idx][col_idx] = strategy.mask(
                             masked_data[row_idx][col_idx], {}
                         )
-                        masked_columns.add(column)
-                        column_stats.append(
-                            {
-                                "column": column,
-                                "detected_types": ["llm_detected"],
-                                "risk_level": 2,  # LLM detections are treated as higher risk
-                                "detection_method": "llm_analysis"
-                            }
-                        )
+                        masked_columns.add(columns[col_idx])
+                        pattern_cell_count += 1
+                        detected_types.add(data_type)
                     except ValueError:
-                        # Strategy not found, skip
                         pass
 
-        # Generate summary
-        if llm_result:
+            # Stage 2B: Optional targeted LLM analysis
+            llm_cell_count = 0
+            llm_result = None
+
+            if detector.use_llm and len(masked_data) > 0:
+                already_masked = list(masked_columns)
+                llm_result, llm_operations = detector.detect_runtime_sensitive_data(
+                    masked_data, columns, already_masked
+                )
+
+                if llm_result and llm_operations:
+                    for row_idx, col_idx, strategy_name in llm_operations:
+                        if row_idx < len(masked_data) and col_idx < len(masked_data[row_idx]):
+                            try:
+                                strategy = self.strategy_factory.get_strategy(strategy_name)
+                                masked_data[row_idx][col_idx] = strategy.mask(
+                                    masked_data[row_idx][col_idx], {}
+                                )
+                                masked_columns.add(columns[col_idx])
+                                llm_cell_count += 1
+                            except ValueError:
+                                pass
+
+            # Build comprehensive runtime summary
             summary_parts = []
-            if column_stats:
-                pattern_count = sum(1 for s in column_stats if s.get("detection_method") == "pattern_matching")
-                llm_count = sum(1 for s in column_stats if s.get("detection_method") == "llm_analysis")
-                summary_parts.append(f"Pattern matching: {pattern_count} columns")
-                summary_parts.append(f"LLM detection: {llm_count} columns")
+            if pattern_cell_count > 0:
+                types_str = ", ".join(sorted(detected_types))
+                summary_parts.append(f"Pattern matching: {pattern_cell_count} cells masked ({types_str})")
+            if llm_cell_count > 0:
+                summary_parts.append(f"LLM detection: {llm_cell_count} cells masked")
+            if llm_result and getattr(llm_result, "summary", ""):
                 summary_parts.append(f"LLM summary: {llm_result.summary}")
-                summary_parts.append(f"LLM confidence: {llm_result.confidence}")
-            return " | ".join(summary_parts)
-        else:
-            return llm_client.summarize_runtime_detection(column_stats)
+                conf_val = getattr(llm_result.confidence, "value", str(llm_result.confidence))
+                summary_parts.append(f"LLM confidence: {conf_val}")
+
+            return " | ".join(summary_parts) if summary_parts else None
+        except Exception:
+            return None
 
     def apply_single_masking(self, value: Any, policy: MaskingPolicy) -> Any:
         strategy = self.strategy_factory.get_strategy(policy.strategy)

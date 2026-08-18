@@ -7,18 +7,62 @@ import re
 class SensitiveDataDetector:
     """Detects sensitive data in database records using pattern matching and LLM analysis."""
 
-    # Patterns for detecting sensitive data in values
+    # Patterns for detecting sensitive data in values (ordered by specificity)
     DATA_PATTERNS = {
         'email': r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}',
-        'phone': r'\+?1?[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}',
-        'ssn': r'\d{3}[-.\s]?\d{2}[-.\s]?\d{4}',
         'credit_card': r'\b(?:\d[ -]*?){13,16}\b',
+        'ssn': r'\b\d{3}[-.\s]?\d{2}[-.\s]?\d{4}\b',
+        'phone': r'(?<!\d)(?:\+?1[-.\s]?)?(?:\(\d{3}\)|\d{3})[-.\s]?\d{3}[-.\s]?\d{4}(?!\d)',
         'ip_address': r'\b(?:\d{1,3}\.){3}\d{1,3}\b',
         'url': r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+[/\w .-]*/?'
     }
 
+    PATTERN_STRATEGIES = {
+        'email': 'EMAIL',
+        'phone': 'PHONE_LAST4',
+        'ssn': 'REDACT',
+        'credit_card': 'REDACT',
+        'ip_address': 'REDACT',
+        'url': 'REDACT',
+    }
+
     def __init__(self):
         self.use_llm = llm_client.is_available()
+
+    def detect_local_cells(
+        self,
+        data: List[List[Any]],
+        columns: List[str],
+        unmasked_col_indices: Optional[List[int]] = None,
+    ) -> List[Tuple[int, int, str, str]]:
+        """
+        Detect obvious PII patterns in unmasked cells locally.
+
+        Returns:
+            List of (row_index, column_index, detected_type, masking_strategy)
+        """
+        if not data or not columns:
+            return []
+
+        if unmasked_col_indices is None:
+            unmasked_col_indices = list(range(len(columns)))
+
+        detected_cells: List[Tuple[int, int, str, str]] = []
+        for row_idx, row in enumerate(data):
+            for col_idx in unmasked_col_indices:
+                if col_idx >= len(row) or row[col_idx] is None:
+                    continue
+                cell_str = str(row[col_idx]).strip()
+                if not cell_str:
+                    continue
+
+                for data_type, pattern in self.DATA_PATTERNS.items():
+                    if re.search(pattern, cell_str):
+                        strategy = self.PATTERN_STRATEGIES.get(data_type, 'REDACT')
+                        detected_cells.append((row_idx, col_idx, data_type, strategy))
+                        break  # Match primary pattern per cell
+
+        return detected_cells
 
     def detect_sensitive_data(
         self,
@@ -159,7 +203,7 @@ class SensitiveDataDetector:
     ) -> Tuple[RuntimeDetectionResult, List[Tuple[int, int, str]]]:
         """
         Perform LLM-based runtime sensitive data detection.
-        This is a secondary safety layer after deterministic masking.
+        Validates detections to ensure only legitimate, bounded cell operations are returned.
 
         Args:
             data: Query result rows (may already be partially masked)
@@ -169,28 +213,63 @@ class SensitiveDataDetector:
         Returns:
             Tuple of (LLM detection result, list of (row_idx, col_idx, strategy) to apply)
         """
+        from app.masking.strategies import MaskingStrategyFactory
+        strategy_factory = MaskingStrategyFactory()
+
         # Use LLM for structured detection
-        llm_result = llm_client.detect_runtime_sensitive_data(
-            data, columns, already_masked_columns
-        )
+        try:
+            llm_result = llm_client.detect_runtime_sensitive_data(
+                data, columns, already_masked_columns
+            )
+        except Exception:
+            llm_result = None
 
         if not llm_result:
-            # Return empty result if LLM unavailable
             empty_result = RuntimeDetectionResult(
                 has_sensitive_data=False,
                 detections=[],
                 summary="LLM detection unavailable - pattern matching only",
-                confidence="low"
+                confidence="LOW"
             )
             return empty_result, []
 
-        # Convert LLM detections to actionable masking operations
+        # Normalized lookup for columns
+        col_lookup = {col.strip().lower(): idx for idx, col in enumerate(columns)}
+        masked_set = {c.strip().lower() for c in already_masked_columns if c}
+
+        # Convert and validate LLM detections to actionable masking operations
         masking_operations = []
+        valid_detections = []
+
         for detection in llm_result.detections:
-            if detection.column_name in columns:
-                col_idx = columns.index(detection.column_name)
-                masking_operations.append(
-                    (detection.row_index, col_idx, detection.recommended_strategy)
-                )
+            col_norm = (detection.column_name or "").strip().lower()
+            if col_norm not in col_lookup:
+                continue  # Reject hallucinated column
+
+            if col_norm in masked_set:
+                continue  # Reject detection on already-masked column
+
+            col_idx = col_lookup[col_norm]
+            row_idx = detection.row_index
+
+            # Reject out-of-bounds row index
+            if row_idx < 0 or row_idx >= len(data):
+                continue
+
+            # Validate or normalize strategy
+            strat = detection.recommended_strategy or "REDACT"
+            try:
+                strategy_factory.get_strategy(strat)
+                valid_strat = strat
+            except ValueError:
+                valid_strat = "REDACT"
+
+            masking_operations.append((row_idx, col_idx, valid_strat))
+            valid_detections.append(detection)
+
+        # Update detections to only valid detections
+        llm_result.detections = valid_detections
+        if not valid_detections and llm_result.has_sensitive_data:
+            llm_result.has_sensitive_data = False
 
         return llm_result, masking_operations

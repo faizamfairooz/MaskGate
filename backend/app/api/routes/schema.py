@@ -4,7 +4,7 @@ from typing import List, Optional
 
 from app.services.schema_service import SchemaService
 from app.schemas.database import DatabaseSchema, TableSchema
-from app.schemas.masking import MaskingRecommendation
+from app.ai.llm_schemas import ColumnRecommendation
 from app.ai.schema_analyzer import SchemaAnalyzer
 
 router = APIRouter()
@@ -58,22 +58,22 @@ async def get_table_schema(table_name: str, schema: str = "public"):
         raise HTTPException(status_code=500, detail=f"Failed to retrieve table schema: {str(e)}")
 
 
-@router.post("/analyze", response_model=List[MaskingRecommendation])
+@router.post("/analyze", response_model=List[ColumnRecommendation])
 async def analyze_schema(request: Optional[AnalyzeSchemaRequest] = None):
-    """Analyze schema/tables with GenAI/rules and generate masking recommendations."""
+    """Analyze schema/tables with GenAI/rules and return structured masking recommendations."""
     try:
         req = request or AnalyzeSchemaRequest()
         target_schema = req.schema_name
-        results: List[MaskingRecommendation] = []
+        results: List[ColumnRecommendation] = []
         if req.table_name:
             table_schema = schema_service.get_table_schema(req.table_name, schema=target_schema)
-            recs = schema_analyzer.analyze_and_persist_recommendations(req.table_name, table_schema.columns)
+            recs = schema_analyzer.analyze_table_schema(req.table_name, table_schema.columns)
             results.extend(recs)
         else:
             tables = schema_service.get_all_tables(schema=target_schema)
             for tbl in tables:
                 table_schema = schema_service.get_table_schema(tbl, schema=target_schema)
-                recs = schema_analyzer.analyze_and_persist_recommendations(tbl, table_schema.columns)
+                recs = schema_analyzer.analyze_table_schema(tbl, table_schema.columns)
                 results.extend(recs)
         return results
     except ValueError as e:
