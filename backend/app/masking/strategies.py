@@ -4,7 +4,7 @@ import re
 import hashlib
 import random
 import string
-from datetime import datetime
+from datetime import datetime, date
 
 
 class MaskingStrategy(ABC):
@@ -144,6 +144,8 @@ class SSNMaskStrategy(MaskingStrategy):
             return None
 
         ssn = str(value)
+        if len(ssn) == 0:
+            return ""
         digits = re.sub(r"[^\d]", "", ssn)
 
         if len(digits) == 9:
@@ -162,6 +164,8 @@ class CreditCardMaskStrategy(MaskingStrategy):
             return None
 
         cc = str(value)
+        if len(cc) == 0:
+            return ""
         digits = re.sub(r"[^\d]", "", cc)
 
         if len(digits) >= 13:
@@ -218,7 +222,7 @@ class DateMaskStrategy(MaskingStrategy):
         try:
             if isinstance(value, str):
                 dt = datetime.strptime(value, "%Y-%m-%d")
-            elif isinstance(value, datetime):
+            elif isinstance(value, (datetime, date)):
                 dt = value
             else:
                 return value

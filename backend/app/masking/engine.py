@@ -17,17 +17,20 @@ class MaskingEngine:
         columns: List[str],
         policies: List[MaskingPolicy],
         auto_detect: bool = False,
+        already_masked_columns: Optional[List[str]] = None,
     ) -> Tuple[List[List[Any]], List[str], Optional[str]]:
         """
         Apply active deterministic masking policies to query result rows in-memory.
         Does not mutate the original data list.
+        Skips columns already masked in PostgreSQL via DB-level functions.
         """
         if not data or not columns:
             return [list(row) for row in data] if data else [], [], None
 
         # Guarantee zero mutation of the input dataset
         masked_data = [list(row) for row in data]
-        masked_columns: Set[str] = set()
+        masked_columns: Set[str] = set(already_masked_columns or [])
+        already_masked_norm = {c.strip().lower() for c in (already_masked_columns or [])}
 
         # Build column index lookup (case-insensitive for robust SQL column matching)
         col_name_to_indices = {}
@@ -47,6 +50,10 @@ class MaskingEngine:
 
         for policy in active_policies:
             policy_col_norm = (policy.column_name or "").strip().lower()
+            if policy_col_norm in already_masked_norm:
+                # Column was already masked in PostgreSQL at DB-level
+                continue
+
             if policy_col_norm not in col_name_to_indices:
                 continue
 
@@ -110,13 +117,15 @@ class MaskingEngine:
 
             detector = SensitiveDataDetector()
 
-            # Normalized set of columns already masked in Stage 1
+            # Normalized set of columns already masked in Stage 1 (DB-level or deterministic Python)
+            norm_masked_columns = {c.strip().lower() for c in masked_columns if c}
             norm_policy_columns = {p.strip().lower() for p in policy_columns if p}
+            all_protected_columns = norm_masked_columns | norm_policy_columns
 
             # Identify unmasked column indices
             unmasked_col_indices = [
                 idx for idx, col in enumerate(columns)
-                if col.strip().lower() not in norm_policy_columns
+                if col.strip().lower() not in all_protected_columns
             ]
 
             if not unmasked_col_indices:

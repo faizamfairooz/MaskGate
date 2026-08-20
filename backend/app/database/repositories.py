@@ -47,6 +47,14 @@ class PolicyRepository:
             policy.id = rows[0]["id"]
             policy.created_at = rows[0]["created_at"]
             policy.updated_at = rows[0]["updated_at"]
+            if policy.is_active and (policy.status or "ACTIVE").upper() == "ACTIVE":
+                try:
+                    from app.database.db_masking_functions import DBMaskingFunctionManager
+                    DBMaskingFunctionManager.create_or_replace_policy_function(policy)
+                except Exception as e:
+                    # Roll back inserted policy row to prevent inconsistent orphaned active policy
+                    db.execute_update("DELETE FROM masking_policies WHERE id = %s", (policy.id,))
+                    raise RuntimeError(f"Database masking function creation failed for policy {policy.id}: {e}")
         return policy
 
     def get_policy(self, policy_id: int) -> Optional[MaskingPolicy]:
@@ -85,11 +93,138 @@ class PolicyRepository:
             )
         return [self._row_to_policy(r) for r in rows]
 
+    def update_policy(self, policy_id: int, updates: Dict[str, Any]) -> Optional[MaskingPolicy]:
+        existing = self.get_policy(policy_id)
+        if not existing:
+            return None
+
+        set_clauses = []
+        params = []
+
+        if "name" in updates and updates["name"] is not None:
+            set_clauses.append("name = %s")
+            params.append(updates["name"])
+        if "description" in updates and updates["description"] is not None:
+            set_clauses.append("description = %s")
+            params.append(updates["description"])
+        if "strategy" in updates and updates["strategy"] is not None:
+            set_clauses.append("strategy = %s")
+            params.append(updates["strategy"])
+        if "sensitivity" in updates and updates["sensitivity"] is not None:
+            set_clauses.append("sensitivity = %s")
+            params.append(updates["sensitivity"])
+        if "parameters" in updates and updates["parameters"] is not None:
+            set_clauses.append("parameters = %s::jsonb")
+            params.append(json.dumps(updates["parameters"]))
+        if "status" in updates and updates["status"] is not None:
+            set_clauses.append("status = %s")
+            params.append(updates["status"])
+        if "is_active" in updates and updates["is_active"] is not None:
+            set_clauses.append("is_active = %s")
+            params.append(bool(updates["is_active"]))
+
+        if not set_clauses:
+            return existing
+
+        set_clauses.append("updated_at = CURRENT_TIMESTAMP")
+        params.append(policy_id)
+
+        query = f"""
+            UPDATE masking_policies
+            SET {', '.join(set_clauses)}
+            WHERE id = %s
+            RETURNING *
+        """
+        rows = db.execute_query(query, tuple(params))
+        updated = self._row_to_policy(rows[0]) if rows else None
+        if updated:
+            from app.database.db_masking_functions import DBMaskingFunctionManager
+            if updated.is_active and (updated.status or "ACTIVE").upper() == "ACTIVE":
+                try:
+                    DBMaskingFunctionManager.create_or_replace_policy_function(updated)
+                except Exception as e:
+                    # Rollback database policy to existing state
+                    self._restore_policy(existing)
+                    if existing.is_active and (existing.status or "ACTIVE").upper() == "ACTIVE":
+                        try:
+                            DBMaskingFunctionManager.create_or_replace_policy_function(existing)
+                        except Exception:
+                            pass
+                    raise RuntimeError(f"Database masking function update failed for policy {policy_id}: {e}")
+            else:
+                DBMaskingFunctionManager.drop_policy_function(policy_id)
+        return updated
+
+    def _restore_policy(self, policy: MaskingPolicy) -> None:
+        """Rollback helper to restore policy state after failed DB function update."""
+        if not policy.id:
+            return
+        query = """
+            UPDATE masking_policies
+            SET name = %s,
+                description = %s,
+                schema_name = %s,
+                table_name = %s,
+                column_name = %s,
+                strategy = %s,
+                sensitivity = %s,
+                parameters = %s::jsonb,
+                status = %s,
+                source = %s,
+                is_active = %s,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+        """
+        db.execute_query(
+            query,
+            (
+                policy.name,
+                policy.description,
+                policy.schema_name or "public",
+                policy.table_name,
+                policy.column_name,
+                policy.strategy,
+                policy.sensitivity or "MEDIUM",
+                json.dumps(policy.parameters or {}),
+                policy.status or "ACTIVE",
+                policy.source or "ai_recommendation",
+                bool(policy.is_active),
+                policy.id,
+            ),
+        )
+
+    def reactivate_policy(self, policy_id: int) -> Optional[MaskingPolicy]:
+        rows = db.execute_query(
+            """
+            UPDATE masking_policies
+            SET is_active = TRUE, status = 'ACTIVE', updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+            RETURNING *
+            """,
+            (policy_id,),
+        )
+        reactivated = self._row_to_policy(rows[0]) if rows else None
+        if reactivated:
+            from app.database.db_masking_functions import DBMaskingFunctionManager
+            try:
+                DBMaskingFunctionManager.create_or_replace_policy_function(reactivated)
+            except Exception as e:
+                # Rollback to disabled state
+                db.execute_update(
+                    "UPDATE masking_policies SET is_active = FALSE, status = 'DISABLED', updated_at = CURRENT_TIMESTAMP WHERE id = %s",
+                    (policy_id,),
+                )
+                raise RuntimeError(f"Database masking function recreation failed during reactivation for policy {policy_id}: {e}")
+        return reactivated
+
     def delete_policy(self, policy_id: int) -> bool:
         count = db.execute_update(
             "UPDATE masking_policies SET is_active = FALSE, status = 'DISABLED', updated_at = CURRENT_TIMESTAMP WHERE id = %s",
             (policy_id,),
         )
+        if count > 0:
+            from app.database.db_masking_functions import DBMaskingFunctionManager
+            DBMaskingFunctionManager.drop_policy_function(policy_id)
         return count > 0
 
     def get_policies_for_table(

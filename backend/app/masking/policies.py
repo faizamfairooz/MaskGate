@@ -24,6 +24,12 @@ class PolicyManager:
     def get_all_policies(self, status: Optional[str] = "ACTIVE") -> List[MaskingPolicy]:
         return self._repo.get_all_policies(status=status)
 
+    def update_policy(self, policy_id: int, updates: dict) -> Optional[MaskingPolicy]:
+        return self._repo.update_policy(policy_id, updates)
+
+    def reactivate_policy(self, policy_id: int) -> Optional[MaskingPolicy]:
+        return self._repo.reactivate_policy(policy_id)
+
     def delete_policy(self, policy_id: int) -> bool:
         return self._repo.delete_policy(policy_id)
 

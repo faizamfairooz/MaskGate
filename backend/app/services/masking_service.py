@@ -3,10 +3,12 @@ from typing import Any, Dict, List, Optional
 
 from app.database.postgresql import db
 from app.database.repositories import RecommendationRepository
+from app.database.db_masking_functions import DBMaskingFunctionManager
 from app.masking.engine import MaskingEngine
 from app.masking.policies import PolicyManager
 from app.schemas.masking import (
     MaskingPolicy,
+    MaskingPolicyUpdate,
     MaskingRecommendation,
     MaskingRequest,
     MaskingResult,
@@ -20,6 +22,14 @@ class MaskingService:
         self.engine = MaskingEngine()
         self.policy_manager = PolicyManager()
         self.recommendation_repo = RecommendationRepository()
+        self.db_fn_manager = DBMaskingFunctionManager()
+        # Initialize base PostgreSQL masking functions and sync active policies
+        try:
+            self.db_fn_manager.init_base_functions()
+            active_policies = self.policy_manager.get_all_policies(status="ACTIVE")
+            self.db_fn_manager.sync_all_active_policies(active_policies)
+        except Exception:
+            pass
 
     def validate_table_and_column(
         self, table_name: str, column_name: str, schema_name: str = "public"
@@ -37,7 +47,8 @@ class MaskingService:
 
     def create_policy(self, policy: MaskingPolicy) -> MaskingPolicy:
         """
-        Create or update a masking policy with PostgreSQL table and column validation.
+        Create or update a masking policy with PostgreSQL table and column validation,
+        and generate the corresponding PostgreSQL masking function.
         """
         target_schema = policy.schema_name or "public"
         if not policy.table_name or not policy.table_name.strip():
@@ -64,7 +75,48 @@ class MaskingService:
         policy.status = policy.status or "ACTIVE"
         policy.is_active = True
 
-        return self.policy_manager.create_policy(policy)
+        created = self.policy_manager.create_policy(policy)
+        return created
+
+    def update_policy(
+        self, policy_id: int, update_data: MaskingPolicyUpdate | Dict[str, Any]
+    ) -> MaskingPolicy:
+        """
+        Edit an existing masking policy, validate new strategy/parameters,
+        and immediately update the corresponding PostgreSQL masking function.
+        """
+        existing = self.get_policy(policy_id)
+        if not existing:
+            raise ValueError(f"Policy with ID {policy_id} not found")
+
+        updates = update_data.model_dump(exclude_unset=True) if isinstance(update_data, MaskingPolicyUpdate) else dict(update_data)
+
+        # Validate strategy if being updated
+        if "strategy" in updates and updates["strategy"]:
+            new_strat = updates["strategy"]
+            available_strategies = self.get_available_strategies()
+            if new_strat.upper() not in [s.upper() for s in available_strategies.keys()]:
+                raise ValueError(
+                    f"Invalid masking strategy '{new_strat}'. Must be one of: {list(available_strategies.keys())}"
+                )
+
+        updated_policy = self.policy_manager.update_policy(policy_id, updates)
+        if not updated_policy:
+            raise ValueError(f"Failed to update policy {policy_id}")
+
+        return updated_policy
+
+    def reactivate_policy(self, policy_id: int) -> MaskingPolicy:
+        """Reactivate a deactivated policy and recreate its PostgreSQL function."""
+        existing = self.get_policy(policy_id)
+        if not existing:
+            raise ValueError(f"Policy with ID {policy_id} not found")
+
+        reactivated = self.policy_manager.reactivate_policy(policy_id)
+        if not reactivated:
+            raise ValueError(f"Failed to reactivate policy {policy_id}")
+
+        return reactivated
 
     def get_all_policies(self, status: Optional[str] = "ACTIVE") -> List[MaskingPolicy]:
         """Retrieve all active masking policies."""
@@ -93,7 +145,8 @@ class MaskingService:
         2. Validate table and column exist in PostgreSQL.
         3. Verify no active duplicate policy already exists.
         4. Create ACTIVE MaskingPolicy.
-        5. Update recommendation status to APPROVED.
+        5. Create corresponding PostgreSQL stored function.
+        6. Update recommendation status to APPROVED.
         """
         rec = self.recommendation_repo.get(rec_id)
         if rec is None:
@@ -245,6 +298,7 @@ class MaskingService:
             columns=request.columns,
             policies=policies,
             auto_detect=request.auto_detect,
+            already_masked_columns=request.already_masked_columns,
         )
 
         return MaskingResult(

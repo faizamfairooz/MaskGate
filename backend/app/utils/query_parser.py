@@ -95,6 +95,44 @@ class SQLQueryParser:
             rewritten += ";"
         return rewritten
 
+    def _split_projections(self, proj_str: str) -> List[str]:
+        """Split projection string on top-level commas outside parentheses and quotes."""
+        items = []
+        current = []
+        paren_depth = 0
+        in_quote = False
+        quote_char = ""
+
+        for char in proj_str:
+            if char in ("'", '"'):
+                if in_quote and char == quote_char:
+                    in_quote = False
+                elif not in_quote:
+                    in_quote = True
+                    quote_char = char
+                current.append(char)
+            elif in_quote:
+                current.append(char)
+            elif char == "(":
+                paren_depth += 1
+                current.append(char)
+            elif char == ")":
+                paren_depth = max(0, paren_depth - 1)
+                current.append(char)
+            elif char == "," and paren_depth == 0:
+                item = "".join(current).strip()
+                if item:
+                    items.append(item)
+                current = []
+            else:
+                current.append(char)
+
+        last = "".join(current).strip()
+        if last:
+            items.append(last)
+
+        return items
+
     def rewrite_for_hidden_columns(
         self,
         query: str,
@@ -106,7 +144,6 @@ class SQLQueryParser:
         hidden (DO_NOT_SHOW) columns exist for the referenced table(s).
 
         Returns: (rewritten_query, was_rewritten)
-        If safe deterministic rewriting cannot be applied, returns (query, False).
         """
         if not hidden_columns_by_table:
             return query, False
@@ -122,7 +159,6 @@ class SQLQueryParser:
             if not hidden_cols:
                 return query, False
 
-            # Check if query is simple SELECT * FROM ...
             cleaned = self._remove_comments_and_strings(query).strip()
             alias_prefix = f"{tbl.alias}\\." if tbl.alias else ""
             match = re.search(r"^\s*SELECT\s+(\*|" + alias_prefix + r"\*)\s+FROM\b", cleaned, re.IGNORECASE)
@@ -166,6 +202,193 @@ class SQLQueryParser:
                         return rewritten, True
 
         return query, False
+
+    def rewrite_query_for_db_masking(
+        self,
+        query: str,
+        active_policies: List[Any],
+        get_table_columns_fn: Callable[[str, str], List[str]],
+    ) -> Tuple[str, List[str], bool]:
+        """
+        Rewrites a SELECT query so that PostgreSQL executes stored masking functions
+        directly for columns protected by active masking policies.
+
+        Returns: (rewritten_query, db_masked_columns, was_rewritten)
+        """
+        if not active_policies:
+            return query, [], False
+
+        tables = self.extract_tables(query)
+        if not tables:
+            return query, [], False
+
+        # Build policy lookup and ensure DB functions exist
+        policy_map: Dict[Tuple[str, str], Any] = {}
+        col_policy_map: Dict[str, Any] = {}
+        for p in active_policies:
+            t_name = (p.table_name or "").strip().lower()
+            c_name = (p.column_name or "").strip().lower()
+            policy_map[(t_name, c_name)] = p
+            col_policy_map[c_name] = p
+            if getattr(p, "is_active", True) and (getattr(p, "status", "ACTIVE") or "").upper() == "ACTIVE" and p.id:
+                try:
+                    from app.database.db_masking_functions import DBMaskingFunctionManager
+                    DBMaskingFunctionManager.create_or_replace_policy_function(p)
+                except Exception:
+                    pass
+
+        alias_to_table: Dict[str, TableReference] = {}
+        for t in tables:
+            if t.alias:
+                alias_to_table[t.alias.lower()] = t
+            alias_to_table[t.table_name.lower()] = t
+
+        # Locate SELECT ... FROM
+        cleaned = self._remove_comments_and_strings(query)
+        select_match = re.search(r"^\s*SELECT\s+(DISTINCT\s+)?(.*?)\s+FROM\b", cleaned, re.IGNORECASE | re.DOTALL)
+        if not select_match:
+            return query, [], False
+
+        distinct_part = select_match.group(1) or ""
+        proj_str = select_match.group(2).strip()
+        from_idx = select_match.end() - 4  # index of FROM in cleaned query
+
+        raw_select_match = re.search(r"^\s*SELECT\s+(DISTINCT\s+)?(.*?)\s+FROM\b", query, re.IGNORECASE | re.DOTALL)
+        if not raw_select_match:
+            return query, [], False
+
+        proj_items = self._split_projections(proj_str)
+        if not proj_items:
+            return query, [], False
+
+        new_proj_parts: List[str] = []
+        db_masked_columns: List[str] = []
+        any_modified = False
+
+        for item in proj_items:
+            item_clean = item.strip()
+
+            # Case A: Wildcard `*`
+            if item_clean == "*":
+                expanded_cols: List[str] = []
+                for tbl in tables:
+                    all_cols = get_table_columns_fn(tbl.table_name, tbl.schema_name)
+                    prefix = f"{tbl.alias}." if tbl.alias else (f"{tbl.table_name}." if len(tables) > 1 else "")
+                    for col in all_cols:
+                        policy = policy_map.get((tbl.table_name.lower(), col.lower()))
+                        if policy and getattr(policy, "is_active", True) and (getattr(policy, "status", "ACTIVE") or "").upper() == "ACTIVE":
+                            if not isinstance(policy.id, int) or isinstance(policy.id, bool) or policy.id <= 0:
+                                expanded_cols.append(f"{prefix}{col}")
+                                continue
+                            strat = (policy.strategy or "").strip().upper()
+                            if strat in ("DO_NOT_SHOW", "HIDE", "HIDDEN", "DONOTSHOW"):
+                                # Omit hidden columns from SELECT *
+                                db_masked_columns.append(col)
+                                any_modified = True
+                                continue
+                            else:
+                                fn_name = f"maskgate_policy_{policy.id}"
+                                expanded_cols.append(f"{fn_name}({prefix}{col}::text) AS {col}")
+                                db_masked_columns.append(col)
+                                any_modified = True
+                        else:
+                            expanded_cols.append(f"{prefix}{col}")
+
+                if expanded_cols:
+                    new_proj_parts.append(", ".join(expanded_cols))
+                    any_modified = True
+                continue
+
+            # Case B: Table-specific wildcard `alias.*` or `table.*`
+            tbl_star_match = re.match(r"^([a-zA-Z0-9_\"]+)\.\*$", item_clean)
+            if tbl_star_match:
+                tbl_key = tbl_star_match.group(1).replace('"', "").lower()
+                matched_tbl = alias_to_table.get(tbl_key)
+                if matched_tbl:
+                    all_cols = get_table_columns_fn(matched_tbl.table_name, matched_tbl.schema_name)
+                    prefix = f"{tbl_star_match.group(1)}."
+                    expanded_cols = []
+                    for col in all_cols:
+                        policy = policy_map.get((matched_tbl.table_name.lower(), col.lower()))
+                        if policy and getattr(policy, "is_active", True) and (getattr(policy, "status", "ACTIVE") or "").upper() == "ACTIVE":
+                            if not isinstance(policy.id, int) or isinstance(policy.id, bool) or policy.id <= 0:
+                                expanded_cols.append(f"{prefix}{col}")
+                                continue
+                            strat = (policy.strategy or "").strip().upper()
+                            if strat in ("DO_NOT_SHOW", "HIDE", "HIDDEN", "DONOTSHOW"):
+                                db_masked_columns.append(col)
+                                any_modified = True
+                                continue
+                            else:
+                                fn_name = f"maskgate_policy_{policy.id}"
+                                expanded_cols.append(f"{fn_name}({prefix}{col}::text) AS {col}")
+                                db_masked_columns.append(col)
+                                any_modified = True
+                        else:
+                            expanded_cols.append(f"{prefix}{col}")
+                    if expanded_cols:
+                        new_proj_parts.append(", ".join(expanded_cols))
+                        any_modified = True
+                        continue
+
+            # Case C: Explicit single column reference (e.g. `col`, `t.col`, `col AS c`, `t.col AS c`)
+            col_match = re.match(
+                r"^(?:(?P<tbl>[a-zA-Z0-9_\"]+)\.)?(?P<col>[a-zA-Z0-9_\"]+)(?:\s+(?:AS\s+)?(?P<alias>[a-zA-Z0-9_\"]+))?$",
+                item_clean,
+                re.IGNORECASE,
+            )
+            if col_match:
+                prefix = col_match.group("tbl")
+                col_name = col_match.group("col").replace('"', "")
+                alias_name = col_match.group("alias")
+                effective_alias = alias_name.replace('"', "") if alias_name else col_name
+
+                # Resolve target policy
+                policy = None
+                if prefix:
+                    prefix_clean = prefix.replace('"', "").lower()
+                    matched_tbl = alias_to_table.get(prefix_clean)
+                    if matched_tbl:
+                        policy = policy_map.get((matched_tbl.table_name.lower(), col_name.lower()))
+                else:
+                    # Search across tables
+                    for tbl in tables:
+                        candidate = policy_map.get((tbl.table_name.lower(), col_name.lower()))
+                        if candidate:
+                            policy = candidate
+                            break
+                    if not policy:
+                        policy = col_policy_map.get(col_name.lower())
+
+                if policy and getattr(policy, "is_active", True) and (getattr(policy, "status", "ACTIVE") or "").upper() == "ACTIVE":
+                    if not isinstance(policy.id, int) or isinstance(policy.id, bool) or policy.id <= 0:
+                        new_proj_parts.append(item_clean)
+                        continue
+                    strat = (policy.strategy or "").strip().upper()
+                    target_expr = f"{prefix}.{col_name}" if prefix else col_name
+                    if strat in ("DO_NOT_SHOW", "HIDE", "HIDDEN", "DONOTSHOW"):
+                        new_proj_parts.append(f"'[HIDDEN]'::text AS {effective_alias}")
+                        db_masked_columns.append(effective_alias)
+                        any_modified = True
+                    else:
+                        fn_name = f"maskgate_policy_{policy.id}"
+                        new_proj_parts.append(f"{fn_name}({target_expr}::text) AS {effective_alias}")
+                        db_masked_columns.append(effective_alias)
+                        any_modified = True
+                    continue
+
+            # Case D: Other expressions (keep untouched)
+            new_proj_parts.append(item_clean)
+
+        if any_modified and new_proj_parts:
+            new_proj_str = ", ".join(new_proj_parts)
+            # Find the projection range in original query
+            start_pos = raw_select_match.start(2)
+            end_pos = raw_select_match.end(2)
+            rewritten_query = query[:start_pos] + new_proj_str + query[end_pos:]
+            return rewritten_query, db_masked_columns, True
+
+        return query, [], False
 
     def _parse_table_token(self, token: str) -> Optional[TableReference]:
         """Parse a table reference string like 'public.users AS u' or 'patients'."""

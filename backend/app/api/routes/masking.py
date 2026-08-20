@@ -5,6 +5,7 @@ from typing import List, Optional, Dict
 from app.services.masking_service import MaskingService
 from app.schemas.masking import (
     MaskingPolicy,
+    MaskingPolicyUpdate,
     MaskingRequest,
     MaskingResult,
     MaskingRecommendation,
@@ -55,6 +56,34 @@ async def get_policy(policy_id: int):
     if policy is None:
         raise HTTPException(status_code=404, detail="Policy not found")
     return policy
+
+
+@router.put("/policies/{policy_id}", response_model=MaskingPolicy)
+async def update_policy(policy_id: int, update_data: MaskingPolicyUpdate):
+    """Edit an existing masking policy and update its DB masking function."""
+    try:
+        return masking_service.update_policy(policy_id, update_data)
+    except ValueError as e:
+        detail = str(e)
+        if "not found" in detail.lower():
+            raise HTTPException(status_code=404, detail=detail)
+        raise HTTPException(status_code=400, detail=detail)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update policy: {str(e)}")
+
+
+@router.post("/policies/{policy_id}/reactivate", response_model=MaskingPolicy)
+async def reactivate_policy(policy_id: int):
+    """Reactivate a disabled policy and recreate its DB masking function."""
+    try:
+        return masking_service.reactivate_policy(policy_id)
+    except ValueError as e:
+        detail = str(e)
+        if "not found" in detail.lower():
+            raise HTTPException(status_code=404, detail=detail)
+        raise HTTPException(status_code=400, detail=detail)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to reactivate policy: {str(e)}")
 
 
 @router.delete("/policies/{policy_id}")

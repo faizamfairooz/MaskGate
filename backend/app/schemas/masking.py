@@ -35,6 +35,22 @@ class MaskingPolicy(BaseModel):
     updated_at: Optional[datetime] = None
 
 
+class MaskingPolicyUpdate(BaseModel):
+    """Schema for updating an existing masking policy."""
+    model_config = {"populate_by_name": True}
+
+    name: Optional[str] = None
+    description: Optional[str] = None
+    strategy: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("strategy", "masking_strategy"),
+    )
+    sensitivity: Optional[str] = None
+    parameters: Optional[Dict[str, Any]] = None
+    status: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
 class MaskingRecommendation(BaseModel):
     """AI-generated masking recommendation awaiting admin review."""
     model_config = {"populate_by_name": True}
@@ -75,6 +91,7 @@ class MaskingRequest(BaseModel):
     data: List[List[Any]]
     policy_ids: Optional[List[int]] = None
     auto_detect: bool = False
+    already_masked_columns: Optional[List[str]] = None
 
 
 class MaskingResult(BaseModel):

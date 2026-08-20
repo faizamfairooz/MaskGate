@@ -50,17 +50,14 @@ class QueryService:
         default_limit = getattr(settings, "DEFAULT_QUERY_LIMIT", 100)
         executed_query = self.query_parser.apply_default_limit(query, default_limit=default_limit)
 
-        # 3. DO_NOT_SHOW query rewriting before PostgreSQL execution
+        # 3. DB-Level Masking Query Rewriting (PostgreSQL applies masking functions directly)
+        db_masked_columns: List[str] = []
+        was_db_rewritten = False
+
         if apply_masking and tables:
             table_tuples = [(t.schema_name, t.table_name) for t in tables]
             active_policies = self.masking_service.policy_manager.get_policies_for_tables(table_tuples)
-            hidden_by_table: Dict[str, Set[str]] = {}
-            for p in active_policies:
-                strat = (p.strategy or "").strip().upper()
-                if strat in ("DO_NOT_SHOW", "HIDE", "HIDDEN", "DONOTSHOW"):
-                    hidden_by_table.setdefault(p.table_name, set()).add(p.column_name)
-
-            if hidden_by_table:
+            if active_policies:
                 def _get_table_cols(tbl: str, schema: str) -> List[str]:
                     try:
                         cols = db.get_table_schema(tbl, schema=schema)
@@ -68,10 +65,10 @@ class QueryService:
                     except Exception:
                         return []
 
-                rewritten, was_rewritten = self.query_parser.rewrite_for_hidden_columns(
-                    executed_query, hidden_by_table, _get_table_cols
+                rewritten, db_masked_columns, was_db_rewritten = self.query_parser.rewrite_query_for_db_masking(
+                    executed_query, active_policies, _get_table_cols
                 )
-                if was_rewritten:
+                if was_db_rewritten:
                     executed_query = rewritten
 
         start_time = time.time()
@@ -88,7 +85,7 @@ class QueryService:
 
         columns = list(results[0].keys())
         rows = [list(row.values()) for row in results]
-        masked_columns: List[str] = []
+        masked_columns: List[str] = list(db_masked_columns) if was_db_rewritten else []
         masked_data = rows
         runtime_summary = None
         llm_detection_enabled = False
@@ -114,6 +111,7 @@ class QueryService:
                     data=rows,
                     policy_ids=[] if not apply_masking else None,
                     auto_detect=effective_auto_detect,
+                    already_masked_columns=db_masked_columns if was_db_rewritten else None,
                 )
             )
             masked_data = masking_result.masked_data

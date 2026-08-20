@@ -33,6 +33,19 @@ function MaskingPolicies() {
   const [selectedSensitivity, setSelectedSensitivity] = useState('MEDIUM')
   const [policyDescription, setPolicyDescription] = useState('')
 
+  // Policy Edit Modal State
+  const [editingPolicy, setEditingPolicy] = useState(null)
+  const [editStrategy, setEditStrategy] = useState('EMAIL')
+  const [editSensitivity, setEditSensitivity] = useState('MEDIUM')
+  const [editDescription, setEditDescription] = useState('')
+  const [editVisibleChars, setEditVisibleChars] = useState(2)
+  const [editBinSize, setEditBinSize] = useState(1000)
+  const [editTokenLength, setEditTokenLength] = useState(16)
+  const [editNoiseLevel, setEditNoiseLevel] = useState(0.1)
+  const [editHashAlgorithm, setEditHashAlgorithm] = useState('sha256')
+  const [editError, setEditError] = useState(null)
+  const [savingEdit, setSavingEdit] = useState(false)
+
   const showNotification = (msg, isError = false) => {
     if (isError) {
       setErrorMessage(msg)
@@ -266,6 +279,181 @@ function MaskingPolicies() {
     }
   }
 
+  const handleOpenEdit = (policy) => {
+    setEditingPolicy(policy)
+    setEditStrategy(policy.strategy || 'EMAIL')
+    setEditSensitivity(policy.sensitivity || 'MEDIUM')
+    setEditDescription(policy.description || '')
+
+    let rawParams = policy.parameters
+    if (typeof rawParams === 'string') {
+      try {
+        rawParams = JSON.parse(rawParams)
+      } catch (e) {
+        rawParams = {}
+      }
+    }
+    const params = typeof rawParams === 'object' && rawParams !== null ? rawParams : {}
+    setEditVisibleChars(params.visible_chars !== undefined ? params.visible_chars : 2)
+    setEditBinSize(params.bin_size !== undefined ? params.bin_size : 1000)
+    setEditTokenLength(params.token_length !== undefined ? params.token_length : 16)
+    setEditNoiseLevel(params.noise_level !== undefined ? params.noise_level : 0.1)
+    setEditHashAlgorithm(params.algorithm || 'sha256')
+    setEditError(null)
+    setSavingEdit(false)
+  }
+
+  const handleCloseEdit = () => {
+    setEditingPolicy(null)
+    setEditError(null)
+    setSavingEdit(false)
+  }
+
+  const validateEditForm = () => {
+    const strat = (editStrategy || '').toUpperCase()
+    if (!strat) {
+      return 'Please select a masking strategy.'
+    }
+
+    if (strat === 'PARTIAL' || strat === 'PARTIAL_MASK') {
+      const vis = parseInt(editVisibleChars, 10)
+      if (isNaN(vis) || vis < 1) {
+        return 'Visible characters (visible_chars) must be a positive integer of at least 1.'
+      }
+      if (vis > 20) {
+        return 'Visible characters (visible_chars) cannot exceed 20.'
+      }
+    }
+
+    if (strat === 'GENERALIZATION') {
+      const bin = parseFloat(editBinSize)
+      if (isNaN(bin) || bin <= 0) {
+        return 'Bin size (bin_size) must be a positive number greater than 0.'
+      }
+    }
+
+    if (strat === 'TOKENIZATION') {
+      const tok = parseInt(editTokenLength, 10)
+      if (isNaN(tok) || tok < 8) {
+        return 'Token length (token_length) must be at least 8.'
+      }
+      if (tok > 64) {
+        return 'Token length (token_length) cannot exceed 64.'
+      }
+    }
+
+    if (strat === 'NOISE_ADDITION') {
+      const noise = parseFloat(editNoiseLevel)
+      if (isNaN(noise) || noise < 0 || noise > 1) {
+        return 'Noise level (noise_level) must be between 0.0 and 1.0 (e.g. 0.1 for ±10%).'
+      }
+    }
+
+    return null
+  }
+
+  const buildParametersPayload = (strat) => {
+    const s = (strat || '').toUpperCase()
+    if (s === 'PARTIAL' || s === 'PARTIAL_MASK') {
+      return { visible_chars: parseInt(editVisibleChars, 10) || 2 }
+    }
+    if (s === 'GENERALIZATION') {
+      return { bin_size: parseFloat(editBinSize) || 1000 }
+    }
+    if (s === 'TOKENIZATION') {
+      return { token_length: parseInt(editTokenLength, 10) || 16 }
+    }
+    if (s === 'NOISE_ADDITION') {
+      return { noise_level: parseFloat(editNoiseLevel) || 0.1 }
+    }
+    if (s === 'HASH') {
+      return { algorithm: editHashAlgorithm || 'sha256' }
+    }
+    return {}
+  }
+
+  const extractApiErrorMessage = (error, fallback = 'Failed to update policy') => {
+    if (!error) return fallback
+    if (error.response?.status === 404) {
+      return `Policy #${editingPolicy?.id || ''} was not found in PostgreSQL. It may have been deleted by another administrator.`
+    }
+    if (error.code === 'ERR_NETWORK' || error.message?.includes('Network Error')) {
+      return 'Network connection failed. Unable to reach MaskGate backend service.'
+    }
+    if (error.response?.data?.detail) {
+      const detail = error.response.data.detail
+      if (typeof detail === 'string') {
+        if (detail.includes('Traceback (most recent call last):')) {
+          const lines = detail.trim().split('\n')
+          return lines[lines.length - 1] || fallback
+        }
+        return detail
+      }
+      if (Array.isArray(detail)) {
+        return detail.map((d) => d.msg || d.message || JSON.stringify(d)).join('; ')
+      }
+      if (typeof detail === 'object') {
+        return detail.message || JSON.stringify(detail)
+      }
+    }
+    if (error.message) {
+      return error.message
+    }
+    return fallback
+  }
+
+  const handleSaveEdit = async (e) => {
+    if (e) e.preventDefault()
+    if (!editingPolicy) return
+
+    // Pre-flight client-side validation
+    const validationError = validateEditForm()
+    if (validationError) {
+      setEditError(validationError)
+      return
+    }
+
+    setEditError(null)
+    setSavingEdit(true)
+
+    try {
+      const params = buildParametersPayload(editStrategy)
+      const updatePayload = {
+        strategy: editStrategy,
+        sensitivity: editSensitivity,
+        description: editDescription.trim(),
+        parameters: params,
+      }
+
+      const res = await maskingAPI.updatePolicy(editingPolicy.id, updatePayload)
+      const updatedPolicy = res.data
+
+      // Immediately update local state so table updates synchronously
+      setPolicies((prev) =>
+        prev.map((p) => (p.id === editingPolicy.id ? { ...p, ...updatedPolicy } : p))
+      )
+
+      // Confirm DB function update ONLY after backend successfully completes
+      const pName = updatedPolicy.name || `${updatedPolicy.table_name}.${updatedPolicy.column_name}`
+      const fnName = `maskgate_policy_${updatedPolicy.id}`
+      showNotification(`✓ Policy "${pName}" updated successfully! PostgreSQL masking function (${fnName}) updated.`)
+
+      handleCloseEdit()
+      await fetchPolicies()
+    } catch (error) {
+      console.error('Failed to update policy:', error)
+      const errorMsg = extractApiErrorMessage(error, 'Failed to update masking policy')
+      setEditError(errorMsg)
+      showNotification(errorMsg, true)
+
+      if (error.response?.status === 404) {
+        await fetchPolicies()
+      }
+    } finally {
+      setSavingEdit(false)
+    }
+  }
+
   // Filter recommendations based on search query
   const filteredRecommendations = recommendations.filter((rec) => {
     if (!searchQuery.trim()) return true
@@ -303,6 +491,23 @@ function MaskingPolicies() {
     if (c === 'HIGH') return 'badge-conf-high'
     if (c === 'MEDIUM') return 'badge-conf-medium'
     return 'badge-conf-low'
+  }
+
+  const formatPolicyParameters = (policy) => {
+    let params = policy.parameters
+    if (typeof params === 'string') {
+      try {
+        params = JSON.parse(params)
+      } catch (e) {
+        params = null
+      }
+    }
+    if (!params || typeof params !== 'object' || Object.keys(params).length === 0) {
+      return null
+    }
+    return Object.entries(params)
+      .map(([k, v]) => `${k}: ${v}`)
+      .join(', ')
   }
 
   return (
@@ -1241,71 +1446,640 @@ function MaskingPolicies() {
                       <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Table</th>
                       <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Column</th>
                       <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Strategy</th>
+                      <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Parameters</th>
                       <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Sensitivity</th>
+                      <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>DB Function</th>
                       <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Status</th>
                       <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Source</th>
                       <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569', textAlign: 'right' }}>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {policies.map((policy) => (
-                      <tr key={policy.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        <td style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#0f172a' }}>
-                          {policy.name || `${policy.table_name}.${policy.column_name}`}
-                        </td>
-                        <td style={{ padding: '0.75rem 1rem', color: '#64748b' }}>
-                          <code>{policy.schema_name || 'public'}</code>
-                        </td>
-                        <td style={{ padding: '0.75rem 1rem' }}>
-                          <code>{policy.table_name}</code>
-                        </td>
-                        <td style={{ padding: '0.75rem 1rem' }}>
-                          <code style={{ color: '#2563eb', fontWeight: '600' }}>{policy.column_name}</code>
-                        </td>
-                        <td style={{ padding: '0.75rem 1rem' }}>
-                          <span className={getStrategyBadgeClass(policy.strategy)}>
-                            {policy.strategy}
-                          </span>
-                        </td>
-                        <td style={{ padding: '0.75rem 1rem' }}>
-                          <span className={getSensitivityBadgeClass(policy.sensitivity)}>
-                            {policy.sensitivity || 'MEDIUM'}
-                          </span>
-                        </td>
-                        <td style={{ padding: '0.75rem 1rem' }}>
-                          <span className="status-badge-approved">
-                            {policy.status || 'ACTIVE'}
-                          </span>
-                        </td>
-                        <td style={{ padding: '0.75rem 1rem', color: '#64748b', fontSize: '0.8rem' }}>
-                          {policy.source || 'ai_recommendation'}
-                        </td>
-                        <td style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>
-                          <button
-                            type="button"
-                            onClick={() => handleDeletePolicy(policy.id, policy.name)}
-                            style={{
-                              background: 'white',
-                              border: '1px solid #fca5a5',
-                              color: '#dc2626',
-                              padding: '0.3rem 0.65rem',
-                              borderRadius: '4px',
-                              fontSize: '0.8rem',
-                              fontWeight: '600',
-                              cursor: 'pointer',
-                              transition: 'all 0.15s ease',
-                            }}
-                          >
-                            Deactivate
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                    {policies.map((policy) => {
+                      const paramsFormatted = formatPolicyParameters(policy)
+                      return (
+                        <tr key={policy.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                          <td style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#0f172a' }}>
+                            <div>{policy.name || `${policy.table_name}.${policy.column_name}`}</div>
+                            {policy.description && policy.description !== policy.name && (
+                              <div style={{ fontSize: '0.78rem', color: '#64748b', fontWeight: 'normal', marginTop: '0.15rem' }}>
+                                {policy.description}
+                              </div>
+                            )}
+                          </td>
+                          <td style={{ padding: '0.75rem 1rem', color: '#64748b' }}>
+                            <code>{policy.schema_name || 'public'}</code>
+                          </td>
+                          <td style={{ padding: '0.75rem 1rem' }}>
+                            <code>{policy.table_name}</code>
+                          </td>
+                          <td style={{ padding: '0.75rem 1rem' }}>
+                            <code style={{ color: '#2563eb', fontWeight: '600' }}>{policy.column_name}</code>
+                          </td>
+                          <td style={{ padding: '0.75rem 1rem' }}>
+                            <span className={getStrategyBadgeClass(policy.strategy)}>
+                              {policy.strategy}
+                            </span>
+                          </td>
+                          <td style={{ padding: '0.75rem 1rem' }}>
+                            {paramsFormatted ? (
+                              <span style={{
+                                display: 'inline-block',
+                                background: '#f1f5f9',
+                                color: '#334155',
+                                padding: '0.2rem 0.5rem',
+                                borderRadius: '4px',
+                                fontSize: '0.78rem',
+                                fontFamily: 'monospace',
+                                border: '1px solid #e2e8f0'
+                              }}>
+                                {paramsFormatted}
+                              </span>
+                            ) : (
+                              <span style={{ color: '#94a3b8', fontSize: '0.82rem' }}>—</span>
+                            )}
+                          </td>
+                          <td style={{ padding: '0.75rem 1rem' }}>
+                            <span className={getSensitivityBadgeClass(policy.sensitivity)}>
+                              {policy.sensitivity || 'MEDIUM'}
+                            </span>
+                          </td>
+                          <td style={{ padding: '0.75rem 1rem' }}>
+                            <code style={{
+                              fontSize: '0.78rem',
+                              background: '#f8fafc',
+                              color: '#0369a1',
+                              border: '1px solid #e0f2fe',
+                              padding: '0.2rem 0.45rem',
+                              borderRadius: '4px'
+                            }}>
+                              maskgate_policy_{policy.id}
+                            </code>
+                          </td>
+                          <td style={{ padding: '0.75rem 1rem' }}>
+                            <span className="status-badge-approved">
+                              {policy.status || 'ACTIVE'}
+                            </span>
+                          </td>
+                          <td style={{ padding: '0.75rem 1rem', color: '#64748b', fontSize: '0.8rem' }}>
+                            {policy.source || 'ai_recommendation'}
+                          </td>
+                          <td style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>
+                            <div style={{ display: 'flex', gap: '0.4rem', justifyContent: 'flex-end' }}>
+                              <button
+                                type="button"
+                                id={`edit-policy-btn-${policy.id}`}
+                                onClick={() => handleOpenEdit(policy)}
+                                style={{
+                                  background: 'white',
+                                  border: '1px solid #93c5fd',
+                                  color: '#2563eb',
+                                  padding: '0.35rem 0.75rem',
+                                  borderRadius: '5px',
+                                  fontSize: '0.82rem',
+                                  fontWeight: '600',
+                                  cursor: 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.3rem',
+                                  transition: 'all 0.15s ease',
+                                }}
+                              >
+                                <span>✏️</span> Edit
+                              </button>
+                              <button
+                                type="button"
+                                id={`deactivate-policy-btn-${policy.id}`}
+                                onClick={() => handleDeletePolicy(policy.id, policy.name)}
+                                style={{
+                                  background: 'white',
+                                  border: '1px solid #fca5a5',
+                                  color: '#dc2626',
+                                  padding: '0.35rem 0.75rem',
+                                  borderRadius: '5px',
+                                  fontSize: '0.82rem',
+                                  fontWeight: '600',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.15s ease',
+                                }}
+                              >
+                                Deactivate
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Hardened Edit Policy Modal */}
+      {editingPolicy && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(15, 23, 42, 0.65)',
+          backdropFilter: 'blur(2px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          padding: '1rem'
+        }}>
+          <div style={{
+            background: 'white',
+            borderRadius: '12px',
+            maxWidth: '560px',
+            width: '100%',
+            maxHeight: '90vh',
+            overflowY: 'auto',
+            padding: '1.75rem',
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+            border: '1px solid #e2e8f0'
+          }}>
+            {/* Modal Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem', borderBottom: '1px solid #f1f5f9', paddingBottom: '0.85rem' }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: '700', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span>✏️</span> Edit Masking Policy
+                </h3>
+                <div style={{ fontSize: '0.84rem', color: '#64748b', marginTop: '0.25rem' }}>
+                  Modify runtime masking parameters and PostgreSQL function
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleCloseEdit}
+                disabled={savingEdit}
+                aria-label="Close modal"
+                style={{
+                  background: '#f1f5f9',
+                  border: 'none',
+                  borderRadius: '6px',
+                  width: '32px',
+                  height: '32px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '1.1rem',
+                  cursor: savingEdit ? 'not-allowed' : 'pointer',
+                  color: '#64748b'
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Error Notification inside Modal */}
+            {editError && (
+              <div style={{
+                marginBottom: '1.25rem',
+                padding: '0.75rem 1rem',
+                background: '#fef2f2',
+                border: '1px solid #fecaca',
+                borderRadius: '8px',
+                color: '#991b1b',
+                fontSize: '0.88rem',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '0.75rem'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span style={{ fontSize: '1.1rem' }}>⚠️</span>
+                  <span>{editError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEditError(null)}
+                  style={{ background: 'none', border: 'none', color: '#991b1b', cursor: 'pointer', fontSize: '1rem', fontWeight: 'bold' }}
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+
+            <form onSubmit={handleSaveEdit}>
+              {/* Target Details Card */}
+              <div style={{
+                background: '#f8fafc',
+                border: '1px solid #e2e8f0',
+                borderRadius: '8px',
+                padding: '0.85rem 1rem',
+                marginBottom: '1.25rem',
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                gap: '0.75rem'
+              }}>
+                <div>
+                  <div style={{ fontSize: '0.75rem', fontWeight: '600', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    Target Column
+                  </div>
+                  <div style={{ marginTop: '0.25rem', fontSize: '0.9rem', color: '#0f172a' }}>
+                    <code>{editingPolicy.schema_name || 'public'}.{editingPolicy.table_name}.<strong style={{ color: '#2563eb' }}>{editingPolicy.column_name}</strong></code>
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '0.75rem', fontWeight: '600', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    PostgreSQL Stored Function
+                  </div>
+                  <div style={{ marginTop: '0.25rem', fontSize: '0.88rem' }}>
+                    <code style={{ background: '#e0f2fe', color: '#0369a1', padding: '0.15rem 0.45rem', borderRadius: '4px', border: '1px solid #bae6fd' }}>
+                      maskgate_policy_{editingPolicy.id}
+                    </code>
+                  </div>
+                </div>
+              </div>
+
+              {/* Strategy & Sensitivity Selection */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.25rem' }}>
+                <div>
+                  <label htmlFor="edit-policy-strategy" style={{ display: 'block', fontWeight: '600', fontSize: '0.85rem', color: '#334155', marginBottom: '0.35rem' }}>
+                    Masking Strategy: <span style={{ color: '#dc2626' }}>*</span>
+                  </label>
+                  <select
+                    id="edit-policy-strategy"
+                    value={editStrategy}
+                    onChange={(e) => {
+                      setEditStrategy(e.target.value)
+                      setEditError(null)
+                    }}
+                    disabled={savingEdit}
+                    style={{
+                      width: '100%',
+                      padding: '0.55rem 0.75rem',
+                      borderRadius: '6px',
+                      border: '1px solid #cbd5e1',
+                      fontSize: '0.88rem',
+                      background: '#ffffff',
+                      color: '#0f172a',
+                      fontWeight: '500',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <optgroup label="Core Strategies">
+                      <option value="EMAIL">EMAIL — Mask username, preserve domain</option>
+                      <option value="PHONE_LAST4">PHONE_LAST4 — Preserve last 4 digits</option>
+                      <option value="PARTIAL">PARTIAL — Preserve edge characters</option>
+                      <option value="REDACT">REDACT — Full asterisk redaction</option>
+                      <option value="DO_NOT_SHOW">DO_NOT_SHOW — Hide column from output</option>
+                      <option value="NONE">NONE — Return raw unmasked value</option>
+                    </optgroup>
+                    <optgroup label="Extended Strategies">
+                      <option value="GENERALIZATION">GENERALIZATION — Convert to numeric ranges</option>
+                      <option value="TOKENIZATION">TOKENIZATION — Random token replacement</option>
+                      <option value="NOISE_ADDITION">NOISE_ADDITION — Add percentage noise</option>
+                      <option value="HASH">HASH — Deterministic hash</option>
+                      <option value="SSN_MASK">SSN_MASK — Mask SSN (***-**-1234)</option>
+                      <option value="CREDIT_CARD_MASK">CREDIT_CARD_MASK — Mask CC (****-****-****-1234)</option>
+                      <option value="DATE_MASK">DATE_MASK — Preserve year (YYYY-01-01)</option>
+                    </optgroup>
+                  </select>
+                </div>
+
+                <div>
+                  <label htmlFor="edit-policy-sensitivity" style={{ display: 'block', fontWeight: '600', fontSize: '0.85rem', color: '#334155', marginBottom: '0.35rem' }}>
+                    Sensitivity Level:
+                  </label>
+                  <select
+                    id="edit-policy-sensitivity"
+                    value={editSensitivity}
+                    onChange={(e) => setEditSensitivity(e.target.value)}
+                    disabled={savingEdit}
+                    style={{
+                      width: '100%',
+                      padding: '0.55rem 0.75rem',
+                      borderRadius: '6px',
+                      border: '1px solid #cbd5e1',
+                      fontSize: '0.88rem',
+                      background: '#ffffff',
+                      color: '#0f172a',
+                      fontWeight: '500',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <option value="HIGH">HIGH (Restricted / PII)</option>
+                    <option value="MEDIUM">MEDIUM (Internal)</option>
+                    <option value="LOW">LOW (General)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Strategy-Specific Parameters Section */}
+              <div style={{ marginBottom: '1.25rem', padding: '0.85rem 1rem', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                <div style={{ fontSize: '0.82rem', fontWeight: '700', color: '#475569', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '0.5rem' }}>
+                  Strategy Configuration & Parameters
+                </div>
+
+                {/* PARTIAL Masking Parameters */}
+                {(editStrategy.toUpperCase() === 'PARTIAL' || editStrategy.toUpperCase() === 'PARTIAL_MASK') && (
+                  <div>
+                    <label htmlFor="edit-visible-chars" style={{ display: 'block', fontWeight: '600', fontSize: '0.85rem', color: '#334155', marginBottom: '0.3rem' }}>
+                      Visible Edge Characters (<code>visible_chars</code>):
+                    </label>
+                    <input
+                      id="edit-visible-chars"
+                      type="number"
+                      min="1"
+                      max="20"
+                      value={editVisibleChars}
+                      onChange={(e) => {
+                        setEditVisibleChars(e.target.value)
+                        setEditError(null)
+                      }}
+                      disabled={savingEdit}
+                      style={{
+                        width: '100%',
+                        padding: '0.5rem 0.75rem',
+                        borderRadius: '6px',
+                        border: '1px solid #cbd5e1',
+                        fontSize: '0.88rem',
+                        boxSizing: 'border-box'
+                      }}
+                    />
+                    <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '0.35rem' }}>
+                      💡 Preserves the first <code>{editVisibleChars || 2}</code> and last <code>{editVisibleChars || 2}</code> characters, replacing middle characters with asterisks (e.g. <code>jo***th</code>).
+                    </div>
+                  </div>
+                )}
+
+                {/* GENERALIZATION Parameters */}
+                {(editStrategy.toUpperCase() === 'GENERALIZATION') && (
+                  <div>
+                    <label htmlFor="edit-bin-size" style={{ display: 'block', fontWeight: '600', fontSize: '0.85rem', color: '#334155', marginBottom: '0.3rem' }}>
+                      Bin Size Range (<code>bin_size</code>):
+                    </label>
+                    <input
+                      id="edit-bin-size"
+                      type="number"
+                      min="1"
+                      step="any"
+                      value={editBinSize}
+                      onChange={(e) => {
+                        setEditBinSize(e.target.value)
+                        setEditError(null)
+                      }}
+                      disabled={savingEdit}
+                      style={{
+                        width: '100%',
+                        padding: '0.5rem 0.75rem',
+                        borderRadius: '6px',
+                        border: '1px solid #cbd5e1',
+                        fontSize: '0.88rem',
+                        boxSizing: 'border-box'
+                      }}
+                    />
+                    <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '0.35rem' }}>
+                      💡 Groups numeric values into bucket intervals of this size (e.g. <code>{editBinSize || 1000}</code> converts <code>5400</code> to <code>5000-6000</code>).
+                    </div>
+                  </div>
+                )}
+
+                {/* TOKENIZATION Parameters */}
+                {(editStrategy.toUpperCase() === 'TOKENIZATION') && (
+                  <div>
+                    <label htmlFor="edit-token-length" style={{ display: 'block', fontWeight: '600', fontSize: '0.85rem', color: '#334155', marginBottom: '0.3rem' }}>
+                      Token Length (<code>token_length</code>):
+                    </label>
+                    <input
+                      id="edit-token-length"
+                      type="number"
+                      min="8"
+                      max="64"
+                      value={editTokenLength}
+                      onChange={(e) => {
+                        setEditTokenLength(e.target.value)
+                        setEditError(null)
+                      }}
+                      disabled={savingEdit}
+                      style={{
+                        width: '100%',
+                        padding: '0.5rem 0.75rem',
+                        borderRadius: '6px',
+                        border: '1px solid #cbd5e1',
+                        fontSize: '0.88rem',
+                        boxSizing: 'border-box'
+                      }}
+                    />
+                    <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '0.35rem' }}>
+                      💡 Generates a random alphanumeric token of length <code>{editTokenLength || 16}</code> (min 8).
+                    </div>
+                  </div>
+                )}
+
+                {/* NOISE ADDITION Parameters */}
+                {(editStrategy.toUpperCase() === 'NOISE_ADDITION') && (
+                  <div>
+                    <label htmlFor="edit-noise-level" style={{ display: 'block', fontWeight: '600', fontSize: '0.85rem', color: '#334155', marginBottom: '0.3rem' }}>
+                      Noise Level (<code>noise_level</code>, 0.0 - 1.0):
+                    </label>
+                    <input
+                      id="edit-noise-level"
+                      type="number"
+                      min="0.0"
+                      max="1.0"
+                      step="0.01"
+                      value={editNoiseLevel}
+                      onChange={(e) => {
+                        setEditNoiseLevel(e.target.value)
+                        setEditError(null)
+                      }}
+                      disabled={savingEdit}
+                      style={{
+                        width: '100%',
+                        padding: '0.5rem 0.75rem',
+                        borderRadius: '6px',
+                        border: '1px solid #cbd5e1',
+                        fontSize: '0.88rem',
+                        boxSizing: 'border-box'
+                      }}
+                    />
+                    <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '0.35rem' }}>
+                      💡 Adds random variation scaled by <code>{editNoiseLevel || 0.1}</code> (e.g. 0.1 represents ±10% variation).
+                    </div>
+                  </div>
+                )}
+
+                {/* HASH Parameters */}
+                {(editStrategy.toUpperCase() === 'HASH') && (
+                  <div>
+                    <label htmlFor="edit-hash-algo" style={{ display: 'block', fontWeight: '600', fontSize: '0.85rem', color: '#334155', marginBottom: '0.3rem' }}>
+                      Hash Algorithm (<code>algorithm</code>):
+                    </label>
+                    <select
+                      id="edit-hash-algo"
+                      value={editHashAlgorithm}
+                      onChange={(e) => setEditHashAlgorithm(e.target.value)}
+                      disabled={savingEdit}
+                      style={{
+                        width: '100%',
+                        padding: '0.5rem 0.75rem',
+                        borderRadius: '6px',
+                        border: '1px solid #cbd5e1',
+                        fontSize: '0.88rem',
+                        background: '#ffffff',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <option value="sha256">SHA-256 (Default)</option>
+                      <option value="md5">MD5 (Fast / PL/pgSQL)</option>
+                      <option value="sha512">SHA-512 (High Security)</option>
+                    </select>
+                    <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '0.35rem' }}>
+                      💡 Replaces data with deterministic one-way cryptographic hash.
+                    </div>
+                  </div>
+                )}
+
+                {/* EMAIL Notice */}
+                {(editStrategy.toUpperCase() === 'EMAIL' || editStrategy.toUpperCase() === 'EMAIL_MASK') && (
+                  <div style={{ fontSize: '0.85rem', color: '#334155', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span>📧</span>
+                    <span><strong>Email Masking:</strong> Preserves the first character of username and the domain (e.g. <code>j***@example.com</code>). No extra parameters required.</span>
+                  </div>
+                )}
+
+                {/* PHONE_LAST4 Notice */}
+                {(editStrategy.toUpperCase() === 'PHONE_LAST4' || editStrategy.toUpperCase() === 'PHONE' || editStrategy.toUpperCase() === 'PHONE_MASK' || editStrategy.toUpperCase() === 'LAST4') && (
+                  <div style={{ fontSize: '0.85rem', color: '#334155', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span>📞</span>
+                    <span><strong>Phone Masking:</strong> Preserves the last 4 digits and masks all preceding numbers (e.g. <code>***-***-1234</code>). No extra parameters required.</span>
+                  </div>
+                )}
+
+                {/* REDACT Notice */}
+                {(editStrategy.toUpperCase() === 'REDACT' || editStrategy.toUpperCase() === 'REDACTION') && (
+                  <div style={{ fontSize: '0.85rem', color: '#334155', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span>🔒</span>
+                    <span><strong>Full Redaction:</strong> Replaces the entire value with asterisks <code>***</code> of equal length. No extra parameters required.</span>
+                  </div>
+                )}
+
+                {/* DO_NOT_SHOW Notice */}
+                {(editStrategy.toUpperCase() === 'DO_NOT_SHOW' || editStrategy.toUpperCase() === 'DONOTSHOW' || editStrategy.toUpperCase() === 'HIDE' || editStrategy.toUpperCase() === 'HIDDEN') && (
+                  <div style={{ fontSize: '0.85rem', color: '#334155', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span>🚫</span>
+                    <span><strong>Exclude Column:</strong> Replaces output with <code>[HIDDEN]</code> and excludes raw data from query results. No extra parameters required.</span>
+                  </div>
+                )}
+
+                {/* NONE Notice */}
+                {(editStrategy.toUpperCase() === 'NONE' || editStrategy.toUpperCase() === 'NO_MASK') && (
+                  <div style={{ fontSize: '0.85rem', color: '#334155', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span>⚪</span>
+                    <span><strong>No Masking:</strong> Returns original raw PostgreSQL values without modification. No extra parameters required.</span>
+                  </div>
+                )}
+
+                {/* SSN / CC / Date Notice */}
+                {['SSN_MASK', 'CREDIT_CARD_MASK', 'DATE_MASK'].includes(editStrategy.toUpperCase()) && (
+                  <div style={{ fontSize: '0.85rem', color: '#334155', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span>🛡️</span>
+                    <span><strong>Deterministic Standard:</strong> Built-in pattern applied automatically at database level. No extra parameters required.</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Description / Rationale */}
+              <div style={{ marginBottom: '1.25rem' }}>
+                <label htmlFor="edit-policy-desc" style={{ display: 'block', fontWeight: '600', fontSize: '0.85rem', color: '#334155', marginBottom: '0.35rem' }}>
+                  Description / Security Rationale:
+                </label>
+                <input
+                  id="edit-policy-desc"
+                  type="text"
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  placeholder="e.g. Mask patient email addresses for privacy compliance"
+                  disabled={savingEdit}
+                  style={{
+                    width: '100%',
+                    padding: '0.55rem 0.75rem',
+                    borderRadius: '6px',
+                    border: '1px solid #cbd5e1',
+                    fontSize: '0.88rem',
+                    boxSizing: 'border-box'
+                  }}
+                />
+              </div>
+
+              {/* PostgreSQL Function Update Notice */}
+              <div style={{
+                background: '#eff6ff',
+                border: '1px solid #bfdbfe',
+                borderRadius: '8px',
+                padding: '0.75rem 1rem',
+                marginBottom: '1.5rem',
+                fontSize: '0.82rem',
+                color: '#1e40af',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem'
+              }}>
+                <span>ℹ️</span>
+                <span>
+                  Saving this form will update the policy and immediately execute <code>CREATE OR REPLACE FUNCTION maskgate_policy_{editingPolicy.id}</code> in PostgreSQL.
+                </span>
+              </div>
+
+              {/* Modal Actions */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', borderTop: '1px solid #f1f5f9', paddingTop: '1rem' }}>
+                <button
+                  type="button"
+                  onClick={handleCloseEdit}
+                  disabled={savingEdit}
+                  style={{
+                    padding: '0.55rem 1.15rem',
+                    borderRadius: '6px',
+                    border: '1px solid #cbd5e1',
+                    background: 'white',
+                    color: '#475569',
+                    fontWeight: '600',
+                    fontSize: '0.88rem',
+                    cursor: savingEdit ? 'not-allowed' : 'pointer'
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  id="save-edit-policy-btn"
+                  disabled={savingEdit}
+                  style={{
+                    padding: '0.55rem 1.35rem',
+                    borderRadius: '6px',
+                    border: 'none',
+                    background: savingEdit ? '#94a3b8' : '#2563eb',
+                    color: 'white',
+                    fontWeight: '600',
+                    fontSize: '0.88rem',
+                    cursor: savingEdit ? 'not-allowed' : 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.4rem'
+                  }}
+                >
+                  {savingEdit ? (
+                    <>
+                      <span className="spinner" style={{ width: '14px', height: '14px', borderTopColor: 'white' }} />
+                      Saving & Updating DB Function...
+                    </>
+                  ) : (
+                    'Save & Update DB Function'
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>
