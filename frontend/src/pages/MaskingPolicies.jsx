@@ -154,7 +154,7 @@ function MaskingPolicies() {
         is_active: true
       }
       await maskingAPI.createPolicy(payload)
-      showNotification(`Successfully created active masking policy for "${selectedTable}.${selectedColumn}" (${selectedStrategy})!`)
+      showNotification(`Policy created successfully. Database-level masking is now active for "${selectedTable}.${selectedColumn}".`)
       setSelectedColumn('')
       setPolicyDescription('')
       await fetchPolicies()
@@ -217,7 +217,7 @@ function MaskingPolicies() {
     try {
       const res = await maskingAPI.analyzeAndQueue({ schema: 'public' })
       const count = res.data?.length || 0
-      showNotification(`AI Schema Analysis complete! Queued ${count} recommendation(s) for administrator review.`)
+      showNotification(`AI Schema Analysis complete. Queued ${count} recommendation(s) for administrator review.`)
       await fetchRecommendations()
     } catch (error) {
       console.error('Failed to analyze schema:', error)
@@ -232,7 +232,7 @@ function MaskingPolicies() {
     setActionLoading((prev) => ({ ...prev, [id]: 'approving' }))
     try {
       const res = await maskingAPI.approveRecommendation(id)
-      showNotification(`✓ Approved! Created active masking policy for "${table || res.data.table_name}.${column || res.data.column_name}".`)
+      showNotification(`Recommendation approved. Database-level masking is now active for "${table || res.data.table_name}.${column || res.data.column_name}".`)
       await fetchRecommendations()
       await fetchPolicies()
     } catch (error) {
@@ -252,7 +252,7 @@ function MaskingPolicies() {
     setActionLoading((prev) => ({ ...prev, [id]: 'rejecting' }))
     try {
       await maskingAPI.rejectRecommendation(id)
-      showNotification(`✗ Rejected recommendation for "${table}.${column}". No policy created.`)
+      showNotification(`Recommendation rejected for "${table}.${column}". No policy created.`)
       await fetchRecommendations()
     } catch (error) {
       console.error('Failed to reject recommendation:', error)
@@ -270,7 +270,7 @@ function MaskingPolicies() {
   const handleDeletePolicy = async (policyId, policyName) => {
     try {
       await maskingAPI.deletePolicy(policyId)
-      showNotification(`Policy "${policyName || policyId}" deactivated successfully`)
+      showNotification(`Policy "${policyName || policyId}" deactivated successfully. Database-level protection removed.`)
       await fetchPolicies()
     } catch (error) {
       console.error('Failed to delete policy:', error)
@@ -433,10 +433,9 @@ function MaskingPolicies() {
         prev.map((p) => (p.id === editingPolicy.id ? { ...p, ...updatedPolicy } : p))
       )
 
-      // Confirm DB function update ONLY after backend successfully completes
+      // Local and backend update confirmed
       const pName = updatedPolicy.name || `${updatedPolicy.table_name}.${updatedPolicy.column_name}`
-      const fnName = `maskgate_policy_${updatedPolicy.id}`
-      showNotification(`✓ Policy "${pName}" updated successfully! PostgreSQL masking function (${fnName}) updated.`)
+      showNotification(`Policy "${pName}" updated successfully. Database-level protection has been updated.`)
 
       handleCloseEdit()
       await fetchPolicies()
@@ -515,8 +514,8 @@ function MaskingPolicies() {
       {/* Header with Conceptual Flow Banner */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
-          <h2 style={{ fontSize: '1.75rem', fontWeight: '700', color: '#0f172a', margin: '0 0 0.25rem 0', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-            <span>🛡️</span> Data Masking Policy Management
+          <h2 style={{ fontSize: '1.75rem', fontWeight: '700', color: '#0f172a', margin: '0 0 0.25rem 0' }}>
+            Data Masking Policy Management
           </h2>
           <p style={{ color: '#64748b', fontSize: '0.95rem', margin: 0 }}>
             GenAI analyzes database schema metadata to recommend sensitive columns and masking strategies. Admin explicitly reviews and approves or rejects each recommendation.
@@ -542,8 +541,8 @@ function MaskingPolicies() {
               boxShadow: '0 2px 4px rgba(37,99,235,0.2)',
             }}
           >
-            {analyzing ? <span className="spinner" /> : <span>⚡</span>}
-            {analyzing ? 'Analyzing Schema with AI...' : 'Run AI Schema Analysis'}
+            {analyzing && <span className="spinner" style={{ width: '14px', height: '14px', borderTopColor: 'white' }} />}
+            <span>{analyzing ? 'Analyzing Schema with AI...' : 'Run AI Schema Analysis'}</span>
           </button>
           <button
             type="button"
@@ -572,20 +571,20 @@ function MaskingPolicies() {
         fontSize: '0.85rem',
         color: '#475569'
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <span style={{ fontWeight: '700', color: '#1e293b' }}>Flow:</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: '700', color: '#1e293b' }}>Architecture Flow:</span>
           <span>Database Schema</span>
           <span style={{ color: '#94a3b8' }}>→</span>
           <span style={{ color: '#2563eb', fontWeight: '600' }}>AI Analysis</span>
           <span style={{ color: '#94a3b8' }}>→</span>
           <span style={{ color: '#7c3aed', fontWeight: '600' }}>AI Recommendations</span>
           <span style={{ color: '#94a3b8' }}>→</span>
-          <span style={{ color: '#0d9488', fontWeight: '600' }}>Admin Review (Approve / Reject)</span>
+          <span style={{ color: '#0d9488', fontWeight: '600' }}>Admin Review</span>
           <span style={{ color: '#94a3b8' }}>→</span>
-          <span style={{ color: '#16a34a', fontWeight: '700' }}>Enforced Policy</span>
+          <span style={{ color: '#16a34a', fontWeight: '700' }}>DB-Level Masking Active</span>
         </div>
-        <div style={{ fontSize: '0.8rem', color: '#64748b', fontStyle: 'italic' }}>
-          🔒 LLM only recommends; Administrator remains the decision maker.
+        <div style={{ fontSize: '0.8rem', color: '#64748b' }}>
+          LLM recommends strategies; Administrator approves and enforces database-level policies.
         </div>
       </div>
 
@@ -605,13 +604,13 @@ function MaskingPolicies() {
 
         <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '1rem', boxShadow: '0 1px 2px rgba(0,0,0,0.03)' }}>
           <div style={{ fontSize: '0.78rem', textTransform: 'uppercase', color: '#64748b', fontWeight: '700', letterSpacing: '0.5px' }}>
-            Approved via AI
+            Approved Recommendations
           </div>
           <div style={{ fontSize: '1.75rem', fontWeight: '700', color: '#16a34a', marginTop: '0.25rem' }}>
             {approvedCount}
           </div>
           <div style={{ fontSize: '0.78rem', color: '#94a3b8', marginTop: '0.2rem' }}>
-            Converted into active policies
+            DB-level masking automatically applied
           </div>
         </div>
 
@@ -623,13 +622,13 @@ function MaskingPolicies() {
             {policies.length}
           </div>
           <div style={{ fontSize: '0.78rem', color: '#94a3b8', marginTop: '0.2rem' }}>
-            Actively masking database queries
+            Enforced database-level protection
           </div>
         </div>
 
         <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '1rem', boxShadow: '0 1px 2px rgba(0,0,0,0.03)' }}>
           <div style={{ fontSize: '0.78rem', textTransform: 'uppercase', color: '#64748b', fontWeight: '700', letterSpacing: '0.5px' }}>
-            Rejected Suggestions
+            Rejected Recommendations
           </div>
           <div style={{ fontSize: '1.75rem', fontWeight: '700', color: '#991b1b', marginTop: '0.25rem' }}>
             {rejectedCount}
@@ -648,7 +647,7 @@ function MaskingPolicies() {
       )}
       {errorMessage && (
         <div style={{ padding: '0.85rem 1.25rem', marginBottom: '1.25rem', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', color: '#991b1b', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <span>⚠️</span> {errorMessage}
+          <span>Notice:</span> {errorMessage}
         </div>
       )}
 
@@ -671,7 +670,7 @@ function MaskingPolicies() {
             gap: '0.5rem',
           }}
         >
-          <span>🤖 AI Masking Recommendations</span>
+          <span>AI Recommendations</span>
           <span style={{ background: pendingCount > 0 ? '#fef3c7' : '#e2e8f0', color: pendingCount > 0 ? '#92400e' : '#475569', padding: '0.15rem 0.55rem', borderRadius: '9999px', fontSize: '0.78rem', fontWeight: '700' }}>
             {recommendations.length}
           </span>
@@ -694,7 +693,7 @@ function MaskingPolicies() {
             gap: '0.5rem',
           }}
         >
-          <span>🛡️ Active Masking Policies</span>
+          <span>Active Masking Policies</span>
           <span style={{ background: '#dcfce7', color: '#166534', padding: '0.15rem 0.55rem', borderRadius: '9999px', fontSize: '0.78rem', fontWeight: '700' }}>
             {policies.length}
           </span>
@@ -774,7 +773,7 @@ function MaskingPolicies() {
                     boxShadow: viewMode === 'cards' ? '0 1px 2px rgba(0,0,0,0.05)' : 'none',
                   }}
                 >
-                  🗂️ Cards View
+                  Cards View
                 </button>
                 <button
                   type="button"
@@ -791,7 +790,7 @@ function MaskingPolicies() {
                     boxShadow: viewMode === 'table' ? '0 1px 2px rgba(0,0,0,0.05)' : 'none',
                   }}
                 >
-                  📋 Table View
+                  Table View
                 </button>
               </div>
 
@@ -806,7 +805,7 @@ function MaskingPolicies() {
             <div style={{ padding: '3.5rem 1.5rem', textAlign: 'center', background: 'white', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
               <div className="spinner" style={{ width: '28px', height: '28px', borderColor: '#cbd5e1', borderTopColor: '#2563eb', marginBottom: '1rem' }} />
               <h3 style={{ fontSize: '1.1rem', fontWeight: '600', color: '#0f172a', margin: '0 0 0.35rem 0' }}>
-                Loading AI Masking Recommendations...
+                Loading AI Recommendations...
               </h3>
               <p style={{ color: '#64748b', fontSize: '0.9rem', margin: 0 }}>
                 Retrieving analyzed PostgreSQL schema suggestions and review queue.
@@ -817,7 +816,6 @@ function MaskingPolicies() {
           {/* Error State */}
           {!loadingRecs && fetchError && (
             <div style={{ padding: '2.5rem 1.5rem', textAlign: 'center', background: '#fef2f2', borderRadius: '8px', border: '1px solid #fecaca', color: '#991b1b' }}>
-              <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>⚠️</div>
               <h3 style={{ fontSize: '1.15rem', fontWeight: '700', margin: '0 0 0.5rem 0' }}>
                 Failed to Load Recommendations
               </h3>
@@ -838,7 +836,6 @@ function MaskingPolicies() {
           {/* Empty State */}
           {!loadingRecs && !fetchError && filteredRecommendations.length === 0 && (
             <div style={{ textAlign: 'center', padding: '3.5rem 1.5rem', background: 'white', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-              <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>🔍</div>
               <h3 style={{ fontSize: '1.25rem', fontWeight: '700', color: '#0f172a', margin: '0 0 0.5rem 0' }}>
                 {recommendations.length === 0 ? 'No AI Recommendations Queued' : 'No Matching Recommendations'}
               </h3>
@@ -863,7 +860,7 @@ function MaskingPolicies() {
                     cursor: analyzing ? 'not-allowed' : 'pointer',
                   }}
                 >
-                  ⚡ Scan Database Schema with AI
+                  Scan Database Schema with AI
                 </button>
               ) : (
                 <button
@@ -903,7 +900,7 @@ function MaskingPolicies() {
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.85rem' }}>
                         <div>
                           <div style={{ fontSize: '0.78rem', textTransform: 'uppercase', color: '#64748b', fontWeight: '700', letterSpacing: '0.5px' }}>
-                            Target Target Column
+                            Target Column
                           </div>
                           <div style={{ fontSize: '1.15rem', fontWeight: '700', color: '#0f172a', marginTop: '0.15rem' }}>
                             <code>{rec.table_name}.{rec.column_name}</code>
@@ -914,17 +911,17 @@ function MaskingPolicies() {
                         <div>
                           {isPending && (
                             <span className="status-badge-pending">
-                              <span>⏳</span> Pending Review
+                              Pending Review
                             </span>
                           )}
                           {isApproved && (
                             <span className="status-badge-approved">
-                              <span>✓</span> Approved
+                              Approved
                             </span>
                           )}
                           {isRejected && (
                             <span className="status-badge-rejected">
-                              <span>✗</span> Rejected
+                              Rejected
                             </span>
                           )}
                         </div>
@@ -967,7 +964,7 @@ function MaskingPolicies() {
                           Recommended Masking Strategy:
                         </span>
                         <span className={getStrategyBadgeClass(rec.recommended_strategy)}>
-                          <span>🔒</span> {rec.recommended_strategy}
+                          {rec.recommended_strategy}
                         </span>
                       </div>
 
@@ -1001,7 +998,7 @@ function MaskingPolicies() {
                               transition: 'all 0.15s ease',
                             }}
                           >
-                            <span>✗</span> {isActioning === 'rejecting' ? 'Rejecting...' : 'Reject'}
+                            {isActioning === 'rejecting' ? 'Rejecting...' : 'Reject'}
                           </button>
 
                           <button
@@ -1024,16 +1021,16 @@ function MaskingPolicies() {
                               transition: 'all 0.15s ease',
                             }}
                           >
-                            <span>✓</span> {isActioning === 'approving' ? 'Approving...' : 'Approve'}
+                            {isActioning === 'approving' ? 'Approving...' : 'Approve'}
                           </button>
                         </>
                       ) : isApproved ? (
-                        <span style={{ color: '#16a34a', fontWeight: '600', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                          ✓ Approved (Enforced in Active Policies)
+                        <span style={{ color: '#166534', fontWeight: '600', fontSize: '0.82rem', background: '#dcfce7', border: '1px solid #bbf7d0', padding: '0.25rem 0.65rem', borderRadius: '4px' }}>
+                          DB-level masking: Automatically applied
                         </span>
                       ) : (
                         <span style={{ color: '#991b1b', fontWeight: '600', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                          ✗ Rejected by Admin
+                          Rejected by Admin
                         </span>
                       )}
                     </div>
@@ -1124,7 +1121,7 @@ function MaskingPolicies() {
                                     cursor: isActioning ? 'not-allowed' : 'pointer',
                                   }}
                                 >
-                                  {isActioning === 'approving' ? '...' : '✓ Approve'}
+                                  {isActioning === 'approving' ? '...' : 'Approve'}
                                 </button>
                                 <button
                                   type="button"
@@ -1141,16 +1138,16 @@ function MaskingPolicies() {
                                     cursor: isActioning ? 'not-allowed' : 'pointer',
                                   }}
                                 >
-                                  {isActioning === 'rejecting' ? '...' : '✗ Reject'}
+                                  {isActioning === 'rejecting' ? '...' : 'Reject'}
                                 </button>
                               </div>
                             ) : isApproved ? (
-                              <span style={{ color: '#16a34a', fontWeight: '600', fontSize: '0.82rem' }}>
-                                ✓ Approved
+                              <span style={{ color: '#166534', fontWeight: '600', fontSize: '0.82rem' }}>
+                                Approved — DB-level masking active
                               </span>
                             ) : isRejected ? (
                               <span style={{ color: '#ef4444', fontWeight: '600', fontSize: '0.82rem' }}>
-                                ✗ Rejected
+                                Rejected
                               </span>
                             ) : (
                               <span>{rec.status}</span>
@@ -1192,8 +1189,25 @@ function MaskingPolicies() {
                 Manual Policy Creator
               </h3>
               <p style={{ margin: 0, fontSize: '0.85rem', color: '#64748b' }}>
-                Directly define a custom policy by picking an active PostgreSQL table and column.
+                Directly define a custom policy by selecting a PostgreSQL table and column.
               </p>
+            </div>
+
+            {/* Database-Level Protection Notice Banner */}
+            <div style={{
+              background: '#f0fdf4',
+              border: '1px solid #bbf7d0',
+              borderRadius: '6px',
+              padding: '0.65rem 0.95rem',
+              marginBottom: '1.25rem',
+              fontSize: '0.85rem',
+              color: '#166534',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.6rem'
+            }}>
+              <span style={{ fontWeight: '700' }}>Database-Level Protection:</span>
+              <span>When this policy is created, MaskGate automatically applies PostgreSQL database-level masking to the selected column.</span>
             </div>
 
             <form onSubmit={handleCreatePolicy} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -1387,8 +1401,8 @@ function MaskingPolicies() {
                       gap: '0.4rem'
                     }}
                   >
-                    <span>{creatingPolicy ? '⏳' : '➕'}</span>
-                    {creatingPolicy ? 'Creating...' : 'Create Policy'}
+                    {creatingPolicy && <span className="spinner" style={{ width: '14px', height: '14px', borderTopColor: 'white' }} />}
+                    <span>{creatingPolicy ? 'Creating...' : 'Create Policy'}</span>
                   </button>
                 </div>
               </div>
@@ -1396,7 +1410,6 @@ function MaskingPolicies() {
               {/* DO_NOT_SHOW explanation alert */}
               {selectedStrategy.toUpperCase() === 'DO_NOT_SHOW' && (
                 <div style={{ padding: '0.65rem 0.85rem', background: '#fef3c7', border: '1px solid #fde68a', borderRadius: '6px', fontSize: '0.85rem', color: '#92400e', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <span>🔒</span>
                   <span><strong>DO_NOT_SHOW:</strong> Column will not be returned to the query result. Query rewriter projects permitted columns before PostgreSQL execution where safe, with in-memory exclusion fallback.</span>
                 </div>
               )}
@@ -1411,12 +1424,11 @@ function MaskingPolicies() {
             </div>
           ) : policies.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '3.5rem 1.5rem', background: 'white', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-              <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>🛡️</div>
               <h3 style={{ fontSize: '1.2rem', fontWeight: '600', color: '#0f172a', margin: '0 0 0.5rem 0' }}>
                 No Active Masking Policies
               </h3>
               <p style={{ color: '#64748b', maxWidth: '450px', margin: '0 auto 1.5rem auto', fontSize: '0.9rem' }}>
-                Switch to the AI Masking Recommendations tab to approve recommended rules or create a custom policy above.
+                Switch to the AI Recommendations tab to approve recommended rules or create a custom policy above.
               </p>
               <button
                 type="button"
@@ -1448,7 +1460,7 @@ function MaskingPolicies() {
                       <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Strategy</th>
                       <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Parameters</th>
                       <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Sensitivity</th>
-                      <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>DB Function</th>
+                      <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Database Protection</th>
                       <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Status</th>
                       <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569' }}>Source</th>
                       <th style={{ padding: '0.75rem 1rem', fontWeight: '600', color: '#475569', textAlign: 'right' }}>Actions</th>
@@ -1505,16 +1517,19 @@ function MaskingPolicies() {
                             </span>
                           </td>
                           <td style={{ padding: '0.75rem 1rem' }}>
-                            <code style={{
+                            <span style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              background: '#f0fdf4',
+                              color: '#166534',
+                              border: '1px solid #bbf7d0',
+                              padding: '0.2rem 0.55rem',
+                              borderRadius: '4px',
                               fontSize: '0.78rem',
-                              background: '#f8fafc',
-                              color: '#0369a1',
-                              border: '1px solid #e0f2fe',
-                              padding: '0.2rem 0.45rem',
-                              borderRadius: '4px'
+                              fontWeight: '600'
                             }}>
-                              maskgate_policy_{policy.id}
-                            </code>
+                              Automatically applied
+                            </span>
                           </td>
                           <td style={{ padding: '0.75rem 1rem' }}>
                             <span className="status-badge-approved">
@@ -1545,7 +1560,7 @@ function MaskingPolicies() {
                                   transition: 'all 0.15s ease',
                                 }}
                               >
-                                <span>✏️</span> Edit
+                                Edit
                               </button>
                               <button
                                 type="button"
@@ -1608,11 +1623,11 @@ function MaskingPolicies() {
             {/* Modal Header */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem', borderBottom: '1px solid #f1f5f9', paddingBottom: '0.85rem' }}>
               <div>
-                <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: '700', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <span>✏️</span> Edit Masking Policy
+                <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: '700', color: '#0f172a' }}>
+                  Edit Masking Policy
                 </h3>
                 <div style={{ fontSize: '0.84rem', color: '#64748b', marginTop: '0.25rem' }}>
-                  Modify runtime masking parameters and PostgreSQL function
+                  Modify masking strategy and runtime parameters
                 </div>
               </div>
               <button
@@ -1654,7 +1669,6 @@ function MaskingPolicies() {
                 gap: '0.75rem'
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <span style={{ fontSize: '1.1rem' }}>⚠️</span>
                   <span>{editError}</span>
                 </div>
                 <button
@@ -1690,12 +1704,10 @@ function MaskingPolicies() {
 
                 <div>
                   <div style={{ fontSize: '0.75rem', fontWeight: '600', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                    PostgreSQL Stored Function
+                    Database Protection
                   </div>
-                  <div style={{ marginTop: '0.25rem', fontSize: '0.88rem' }}>
-                    <code style={{ background: '#e0f2fe', color: '#0369a1', padding: '0.15rem 0.45rem', borderRadius: '4px', border: '1px solid #bae6fd' }}>
-                      maskgate_policy_{editingPolicy.id}
-                    </code>
+                  <div style={{ marginTop: '0.25rem', fontSize: '0.85rem', color: '#166534', fontWeight: '600' }}>
+                    DB-level masking active
                   </div>
                 </div>
               </div>
@@ -1807,7 +1819,7 @@ function MaskingPolicies() {
                       }}
                     />
                     <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '0.35rem' }}>
-                      💡 Preserves the first <code>{editVisibleChars || 2}</code> and last <code>{editVisibleChars || 2}</code> characters, replacing middle characters with asterisks (e.g. <code>jo***th</code>).
+                      Preserves the first <code>{editVisibleChars || 2}</code> and last <code>{editVisibleChars || 2}</code> characters, replacing middle characters with asterisks (e.g. <code>jo***th</code>).
                     </div>
                   </div>
                 )}
@@ -1839,7 +1851,7 @@ function MaskingPolicies() {
                       }}
                     />
                     <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '0.35rem' }}>
-                      💡 Groups numeric values into bucket intervals of this size (e.g. <code>{editBinSize || 1000}</code> converts <code>5400</code> to <code>5000-6000</code>).
+                      Groups numeric values into bucket intervals of this size (e.g. <code>{editBinSize || 1000}</code> converts <code>5400</code> to <code>5000-6000</code>).
                     </div>
                   </div>
                 )}
@@ -1871,7 +1883,7 @@ function MaskingPolicies() {
                       }}
                     />
                     <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '0.35rem' }}>
-                      💡 Generates a random alphanumeric token of length <code>{editTokenLength || 16}</code> (min 8).
+                      Generates a random alphanumeric token of length <code>{editTokenLength || 16}</code> (min 8).
                     </div>
                   </div>
                 )}
@@ -1904,7 +1916,7 @@ function MaskingPolicies() {
                       }}
                     />
                     <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '0.35rem' }}>
-                      💡 Adds random variation scaled by <code>{editNoiseLevel || 0.1}</code> (e.g. 0.1 represents ±10% variation).
+                      Adds random variation scaled by <code>{editNoiseLevel || 0.1}</code> (e.g. 0.1 represents ±10% variation).
                     </div>
                   </div>
                 )}
@@ -1935,7 +1947,7 @@ function MaskingPolicies() {
                       <option value="sha512">SHA-512 (High Security)</option>
                     </select>
                     <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '0.35rem' }}>
-                      💡 Replaces data with deterministic one-way cryptographic hash.
+                      Replaces data with deterministic one-way cryptographic hash.
                     </div>
                   </div>
                 )}
@@ -1943,7 +1955,6 @@ function MaskingPolicies() {
                 {/* EMAIL Notice */}
                 {(editStrategy.toUpperCase() === 'EMAIL' || editStrategy.toUpperCase() === 'EMAIL_MASK') && (
                   <div style={{ fontSize: '0.85rem', color: '#334155', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <span>📧</span>
                     <span><strong>Email Masking:</strong> Preserves the first character of username and the domain (e.g. <code>j***@example.com</code>). No extra parameters required.</span>
                   </div>
                 )}
@@ -1951,7 +1962,6 @@ function MaskingPolicies() {
                 {/* PHONE_LAST4 Notice */}
                 {(editStrategy.toUpperCase() === 'PHONE_LAST4' || editStrategy.toUpperCase() === 'PHONE' || editStrategy.toUpperCase() === 'PHONE_MASK' || editStrategy.toUpperCase() === 'LAST4') && (
                   <div style={{ fontSize: '0.85rem', color: '#334155', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <span>📞</span>
                     <span><strong>Phone Masking:</strong> Preserves the last 4 digits and masks all preceding numbers (e.g. <code>***-***-1234</code>). No extra parameters required.</span>
                   </div>
                 )}
@@ -1959,7 +1969,6 @@ function MaskingPolicies() {
                 {/* REDACT Notice */}
                 {(editStrategy.toUpperCase() === 'REDACT' || editStrategy.toUpperCase() === 'REDACTION') && (
                   <div style={{ fontSize: '0.85rem', color: '#334155', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <span>🔒</span>
                     <span><strong>Full Redaction:</strong> Replaces the entire value with asterisks <code>***</code> of equal length. No extra parameters required.</span>
                   </div>
                 )}
@@ -1967,7 +1976,6 @@ function MaskingPolicies() {
                 {/* DO_NOT_SHOW Notice */}
                 {(editStrategy.toUpperCase() === 'DO_NOT_SHOW' || editStrategy.toUpperCase() === 'DONOTSHOW' || editStrategy.toUpperCase() === 'HIDE' || editStrategy.toUpperCase() === 'HIDDEN') && (
                   <div style={{ fontSize: '0.85rem', color: '#334155', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <span>🚫</span>
                     <span><strong>Exclude Column:</strong> Replaces output with <code>[HIDDEN]</code> and excludes raw data from query results. No extra parameters required.</span>
                   </div>
                 )}
@@ -1975,7 +1983,6 @@ function MaskingPolicies() {
                 {/* NONE Notice */}
                 {(editStrategy.toUpperCase() === 'NONE' || editStrategy.toUpperCase() === 'NO_MASK') && (
                   <div style={{ fontSize: '0.85rem', color: '#334155', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <span>⚪</span>
                     <span><strong>No Masking:</strong> Returns original raw PostgreSQL values without modification. No extra parameters required.</span>
                   </div>
                 )}
@@ -1983,7 +1990,6 @@ function MaskingPolicies() {
                 {/* SSN / CC / Date Notice */}
                 {['SSN_MASK', 'CREDIT_CARD_MASK', 'DATE_MASK'].includes(editStrategy.toUpperCase()) && (
                   <div style={{ fontSize: '0.85rem', color: '#334155', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <span>🛡️</span>
                     <span><strong>Deterministic Standard:</strong> Built-in pattern applied automatically at database level. No extra parameters required.</span>
                   </div>
                 )}
@@ -2012,23 +2018,20 @@ function MaskingPolicies() {
                 />
               </div>
 
-              {/* PostgreSQL Function Update Notice */}
+              {/* Database Protection Notice */}
               <div style={{
-                background: '#eff6ff',
-                border: '1px solid #bfdbfe',
+                background: '#f0fdf4',
+                border: '1px solid #bbf7d0',
                 borderRadius: '8px',
                 padding: '0.75rem 1rem',
                 marginBottom: '1.5rem',
-                fontSize: '0.82rem',
-                color: '#1e40af',
+                fontSize: '0.84rem',
+                color: '#166534',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '0.5rem'
               }}>
-                <span>ℹ️</span>
-                <span>
-                  Saving this form will update the policy and immediately execute <code>CREATE OR REPLACE FUNCTION maskgate_policy_{editingPolicy.id}</code> in PostgreSQL.
-                </span>
+                <span><strong>Database protection:</strong> Saving this policy automatically updates its PostgreSQL database-level masking behavior.</span>
               </div>
 
               {/* Modal Actions */}
@@ -2071,10 +2074,10 @@ function MaskingPolicies() {
                   {savingEdit ? (
                     <>
                       <span className="spinner" style={{ width: '14px', height: '14px', borderTopColor: 'white' }} />
-                      Saving & Updating DB Function...
+                      Saving Policy Changes...
                     </>
                   ) : (
-                    'Save & Update DB Function'
+                    'Save Policy Changes'
                   )}
                 </button>
               </div>

@@ -69,18 +69,17 @@ function QueryEditor() {
       {/* Header & Title */}
       <div style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
-          <h1 style={{ margin: '0 0 0.25rem 0', fontSize: '1.6rem', fontWeight: '800', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <span>⚡</span> SQL Query Editor
+          <h1 style={{ margin: '0 0 0.25rem 0', fontSize: '1.6rem', fontWeight: '800', color: '#0f172a' }}>
+            SQL Query Editor
           </h1>
           <p style={{ margin: 0, color: '#64748b', fontSize: '0.92rem' }}>
-            Execute SELECT queries against PostgreSQL with deterministic data masking and runtime sensitive data detection.
+            Execute SELECT queries against PostgreSQL with Stage 1 database-level masking and Stage 2 runtime sensitive-data detection.
           </p>
         </div>
 
         {/* Security Assurances Pill */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#f0fdf4', border: '1px solid #bbf7d0', padding: '0.4rem 0.85rem', borderRadius: '8px', fontSize: '0.82rem', color: '#166534', fontWeight: '600' }}>
-          <span>🛡️</span>
-          <span>Security Engine: <strong>Application-Controlled</strong> (LLM does NOT execute SQL)</span>
+          <span>Security Engine: <strong>Application-Controlled</strong> (Database-level protection enforced; LLM does not execute SQL)</span>
         </div>
       </div>
 
@@ -88,10 +87,10 @@ function QueryEditor() {
       <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '1rem 1.25rem', marginBottom: '1.5rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.6rem', flexWrap: 'wrap', gap: '0.5rem' }}>
           <span style={{ fontSize: '0.85rem', fontWeight: '700', color: '#334155', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            Execution & Masking Pipeline
+            Two-Stage Execution & Masking Pipeline
           </span>
           <span style={{ fontSize: '0.78rem', color: '#64748b' }}>
-            Strictly read-only SELECT • Stage 1 Deterministic • Stage 2 Optional AI
+            Strictly read-only SELECT • Stage 1 Database-Level Masking • Stage 2 Runtime Detection
           </span>
         </div>
 
@@ -109,15 +108,15 @@ function QueryEditor() {
           </div>
           <span style={{ color: '#94a3b8' }}>→</span>
           <div style={{ background: '#dcfce7', color: '#166534', padding: '0.35rem 0.65rem', borderRadius: '6px', whiteSpace: 'nowrap' }}>
-            4. Deterministic Masking
+            4. Stage 1: DB-Level Masking
           </div>
           <span style={{ color: '#94a3b8' }}>→</span>
           <div style={{ background: '#ffedd5', color: '#c2410c', padding: '0.35rem 0.65rem', borderRadius: '6px', whiteSpace: 'nowrap' }}>
-            5. Runtime AI Detection (Opt)
+            5. Stage 2: Runtime Detection (Opt)
           </div>
           <span style={{ color: '#94a3b8' }}>→</span>
           <div style={{ background: '#e2e8f0', color: '#0f172a', padding: '0.35rem 0.65rem', borderRadius: '6px', whiteSpace: 'nowrap' }}>
-            6. Safe Result
+            6. Masked Result
           </div>
         </div>
       </div>
@@ -165,7 +164,7 @@ function QueryEditor() {
                 fontWeight: '500'
               }}
             >
-              {copiedQuery ? '✓ Copied' : '📋 Copy SQL'}
+              {copiedQuery ? 'Copied' : 'Copy SQL'}
             </button>
           </div>
         </div>
@@ -208,9 +207,9 @@ function QueryEditor() {
                   onChange={(e) => setApplyMasking(e.target.checked)}
                   style={{ width: '16px', height: '16px', accentColor: '#2563eb', cursor: 'pointer' }}
                 />
-                <span>Apply Approved Masking Policies</span>
-                <span style={{ fontSize: '0.75rem', fontWeight: '500', color: '#64748b', background: '#e2e8f0', padding: '0.15rem 0.45rem', borderRadius: '4px' }}>
-                  Deterministic Engine
+                <span>Stage 1: Apply Approved Masking Policies</span>
+                <span style={{ fontSize: '0.75rem', fontWeight: '500', color: '#166534', background: '#dcfce7', padding: '0.15rem 0.45rem', borderRadius: '4px', border: '1px solid #bbf7d0' }}>
+                  DB-Level Masking
                 </span>
               </label>
 
@@ -223,9 +222,9 @@ function QueryEditor() {
                   onChange={(e) => setMaskSuspicious(e.target.checked)}
                   style={{ width: '16px', height: '16px', accentColor: '#ea580c', cursor: 'pointer' }}
                 />
-                <span>Detect Suspicious Sensitive Data</span>
-                <span style={{ fontSize: '0.75rem', fontWeight: '500', color: '#c2410c', background: '#ffedd5', padding: '0.15rem 0.45rem', borderRadius: '4px' }}>
-                  Runtime AI & Heuristics
+                <span>Stage 2: Detect Suspicious Sensitive Data</span>
+                <span style={{ fontSize: '0.75rem', fontWeight: '500', color: '#c2410c', background: '#ffedd5', padding: '0.15rem 0.45rem', borderRadius: '4px', border: '1px solid #fed7aa' }}>
+                  Runtime Detection (AI)
                 </span>
               </label>
             </div>
@@ -251,7 +250,7 @@ function QueryEditor() {
                   boxShadow: '0 2px 4px rgba(37, 99, 235, 0.2)'
                 }}
               >
-                <span>{loading ? '⏳' : '▶'}</span>
+                {loading && <span className="spinner" style={{ width: '14px', height: '14px', borderTopColor: 'white' }} />}
                 <span>{loading ? 'Executing Query...' : 'Run Query'}</span>
               </button>
             </div>
@@ -266,7 +265,7 @@ function QueryEditor() {
             /* Error Card */
             <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', padding: '1.25rem', color: '#991b1b' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: '700', fontSize: '1rem', marginBottom: '0.35rem' }}>
-                <span>❌</span> Query Error
+                Query Execution Error
               </div>
               <p style={{ margin: 0, fontSize: '0.9rem', lineHeight: '1.5' }}>
                 {results.error}
@@ -283,30 +282,25 @@ function QueryEditor() {
                 {/* Stats Badges */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', background: '#f1f5f9', padding: '0.3rem 0.65rem', borderRadius: '6px', fontSize: '0.85rem', fontWeight: '600', color: '#334155' }}>
-                    <span>📊</span>
                     <span>{results.row_count} rows</span>
                   </div>
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', background: '#f1f5f9', padding: '0.3rem 0.65rem', borderRadius: '6px', fontSize: '0.85rem', fontWeight: '600', color: '#334155' }}>
-                    <span>⏱️</span>
                     <span>{(results.execution_time * 1000).toFixed(1)} ms</span>
                   </div>
 
                   {results.masked_columns && results.masked_columns.length > 0 ? (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', background: '#dcfce7', color: '#166534', padding: '0.3rem 0.65rem', borderRadius: '6px', fontSize: '0.85rem', fontWeight: '700', border: '1px solid #bbf7d0' }}>
-                      <span>🛡️</span>
-                      <span>{results.masked_columns.length} columns masked ({results.masked_columns.join(', ')})</span>
+                      <span>{results.masked_columns.length} column(s) masked ({results.masked_columns.join(', ')})</span>
                     </div>
                   ) : (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', background: '#f1f5f9', color: '#64748b', padding: '0.3rem 0.65rem', borderRadius: '6px', fontSize: '0.85rem', fontWeight: '500' }}>
-                      <span>🛡️</span>
                       <span>No columns masked</span>
                     </div>
                   )}
 
                   {!hasOuterLimit(query) && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', background: '#e0f2fe', color: '#0369a1', padding: '0.3rem 0.65rem', borderRadius: '6px', fontSize: '0.82rem', fontWeight: '600' }}>
-                      <span>🔒</span>
                       <span>Safe Default LIMIT Enforced</span>
                     </div>
                   )}
@@ -315,7 +309,7 @@ function QueryEditor() {
                 {/* Runtime Summary Pill */}
                 {results.runtime_detection_summary && (
                   <div style={{ fontSize: '0.82rem', background: '#ffedd5', color: '#9a3412', border: '1px solid #fed7aa', padding: '0.3rem 0.65rem', borderRadius: '6px', fontWeight: '600' }}>
-                    🔍 {results.runtime_detection_summary}
+                    Runtime Detection: {results.runtime_detection_summary}
                   </div>
                 )}
               </div>
@@ -323,7 +317,6 @@ function QueryEditor() {
               {/* Data Table */}
               {results.rows.length === 0 ? (
                 <div style={{ padding: '3rem 1rem', textAlign: 'center', color: '#64748b' }}>
-                  <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>📭</div>
                   <div style={{ fontWeight: '600', color: '#1e293b' }}>No rows returned</div>
                   <div style={{ fontSize: '0.85rem', marginTop: '0.25rem' }}>The query executed successfully but produced zero matching rows.</div>
                 </div>
@@ -348,7 +341,11 @@ function QueryEditor() {
                             >
                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                                 <span>{column}</span>
-                                {isMasked && <span style={{ fontSize: '0.75rem' }} title="Masked column">🛡️</span>}
+                                {isMasked && (
+                                  <span style={{ fontSize: '0.75rem', color: '#166534', fontWeight: '600', background: '#dcfce7', padding: '0.1rem 0.35rem', borderRadius: '3px' }}>
+                                    masked
+                                  </span>
+                                )}
                               </div>
                             </th>
                           )
