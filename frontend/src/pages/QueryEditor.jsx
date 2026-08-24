@@ -1,5 +1,34 @@
 import React, { useState } from 'react'
-import { queryAPI } from '../services/api'
+import {
+  Terminal,
+  Play,
+  Copy,
+  Check,
+  ShieldCheck,
+  Sparkles,
+  AlertCircle,
+  Database,
+  ArrowRight,
+  Clock,
+  Rows,
+  Layers,
+  FileCode2,
+  Lock
+} from 'lucide-react'
+import { queryAPI } from '@/services/api'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 
 const SAMPLE_QUERIES = [
   {
@@ -65,331 +94,283 @@ function QueryEditor() {
   }
 
   return (
-    <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '1.5rem', fontFamily: 'system-ui, -apple-system, sans-serif' }}>
-      {/* Header & Title */}
-      <div style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
+    <div className="space-y-6">
+      {/* Page Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 style={{ margin: '0 0 0.25rem 0', fontSize: '1.6rem', fontWeight: '800', color: '#0f172a' }}>
-            SQL Query Editor
+          <h1 className="text-xl font-bold tracking-tight text-foreground flex items-center gap-2">
+            <Terminal className="h-5 w-5 text-primary" />
+            SQL Query Workbench
           </h1>
-          <p style={{ margin: 0, color: '#64748b', fontSize: '0.92rem' }}>
-            Execute SELECT queries against PostgreSQL with Stage 1 database-level masking and Stage 2 runtime sensitive-data detection.
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Execute read-only SQL queries against PostgreSQL protected by database-level masking and runtime detection.
           </p>
         </div>
 
-        {/* Security Assurances Pill */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#f0fdf4', border: '1px solid #bbf7d0', padding: '0.4rem 0.85rem', borderRadius: '8px', fontSize: '0.82rem', color: '#166534', fontWeight: '600' }}>
-          <span>Security Engine: <strong>Application-Controlled</strong> (Database-level protection enforced; LLM does not execute SQL)</span>
+        <div className="flex items-center gap-2">
+          <Badge variant="outline" className="text-xs font-mono py-1 px-2.5 gap-1.5 border-emerald-500/30 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400">
+            <ShieldCheck className="h-3.5 w-3.5" />
+            Application-Controlled Security
+          </Badge>
         </div>
       </div>
 
-      {/* Query Pipeline Explanation Banner */}
-      <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '1rem 1.25rem', marginBottom: '1.5rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.6rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-          <span style={{ fontSize: '0.85rem', fontWeight: '700', color: '#334155', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            Two-Stage Execution & Masking Pipeline
+      {/* Two-Stage Execution & Masking Pipeline Diagram */}
+      <div className="rounded-lg border border-border/80 bg-muted/20 p-3.5 space-y-2 text-xs">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <span className="font-semibold text-foreground text-xs uppercase tracking-wider font-mono">
+            Two-Stage Execution & Masking Architecture
           </span>
-          <span style={{ fontSize: '0.78rem', color: '#64748b' }}>
-            Strictly read-only SELECT • Stage 1 Database-Level Masking • Stage 2 Runtime Detection
+          <span className="text-[11px] text-muted-foreground">
+            Strictly read-only SELECT • Stage 1 DB-Level Masking • Stage 2 Runtime AI Detection
           </span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', overflowX: 'auto', paddingBottom: '0.25rem', fontSize: '0.83rem', fontWeight: '600' }}>
-          <div style={{ background: '#e0f2fe', color: '#0369a1', padding: '0.35rem 0.65rem', borderRadius: '6px', whiteSpace: 'nowrap' }}>
+        <div className="flex items-center gap-2 overflow-x-auto py-1 font-mono text-[11px]">
+          <div className="bg-background border px-2.5 py-1 rounded shadow-2xs font-medium whitespace-nowrap text-foreground flex items-center gap-1.5">
+            <FileCode2 className="h-3 w-3 text-muted-foreground" />
             1. User SQL
           </div>
-          <span style={{ color: '#94a3b8' }}>→</span>
-          <div style={{ background: '#f1f5f9', color: '#334155', padding: '0.35rem 0.65rem', borderRadius: '6px', whiteSpace: 'nowrap' }}>
+          <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
+          <div className="bg-background border px-2.5 py-1 rounded shadow-2xs font-medium whitespace-nowrap text-foreground flex items-center gap-1.5">
+            <Lock className="h-3 w-3 text-amber-500" />
             2. Policy & Limit Hardening
           </div>
-          <span style={{ color: '#94a3b8' }}>→</span>
-          <div style={{ background: '#f3e8ff', color: '#6b21a8', padding: '0.35rem 0.65rem', borderRadius: '6px', whiteSpace: 'nowrap' }}>
+          <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
+          <div className="bg-purple-500/10 border border-purple-500/20 text-purple-700 dark:text-purple-300 px-2.5 py-1 rounded font-medium whitespace-nowrap flex items-center gap-1.5">
+            <Database className="h-3 w-3" />
             3. PostgreSQL Execute
           </div>
-          <span style={{ color: '#94a3b8' }}>→</span>
-          <div style={{ background: '#dcfce7', color: '#166534', padding: '0.35rem 0.65rem', borderRadius: '6px', whiteSpace: 'nowrap' }}>
+          <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
+          <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-300 px-2.5 py-1 rounded font-semibold whitespace-nowrap flex items-center gap-1.5">
+            <ShieldCheck className="h-3.5 w-3.5" />
             4. Stage 1: DB-Level Masking
           </div>
-          <span style={{ color: '#94a3b8' }}>→</span>
-          <div style={{ background: '#ffedd5', color: '#c2410c', padding: '0.35rem 0.65rem', borderRadius: '6px', whiteSpace: 'nowrap' }}>
-            5. Stage 2: Runtime Detection (Opt)
+          <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
+          <div className="bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-300 px-2.5 py-1 rounded font-medium whitespace-nowrap flex items-center gap-1.5">
+            <Sparkles className="h-3 w-3" />
+            5. Stage 2: Runtime AI Detection
           </div>
-          <span style={{ color: '#94a3b8' }}>→</span>
-          <div style={{ background: '#e2e8f0', color: '#0f172a', padding: '0.35rem 0.65rem', borderRadius: '6px', whiteSpace: 'nowrap' }}>
-            6. Masked Result
+          <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
+          <div className="bg-background border px-2.5 py-1 rounded shadow-2xs font-semibold whitespace-nowrap text-foreground">
+            6. Protected Results
           </div>
         </div>
       </div>
 
-      {/* Main Query Form */}
-      <div style={{ background: 'white', border: '1px solid #cbd5e1', borderRadius: '10px', boxShadow: '0 1px 4px rgba(0,0,0,0.04)', marginBottom: '1.5rem', overflow: 'hidden' }}>
-        {/* Editor Toolbar & Sample Queries */}
-        <div style={{ padding: '0.75rem 1rem', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '0.82rem', fontWeight: '600', color: '#475569' }}>Quick Templates:</span>
+      {/* Main SQL Editor Card */}
+      <Card className="shadow-xs overflow-hidden border-border/80">
+        {/* Editor Toolbar & Sample Query Presets */}
+        <div className="p-2.5 px-4 bg-muted/40 border-b flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="font-medium text-muted-foreground text-xs mr-1">Quick Templates:</span>
             {SAMPLE_QUERIES.map((preset, idx) => (
-              <button
+              <Button
                 key={idx}
                 type="button"
+                variant={query === preset.query ? "secondary" : "outline"}
+                size="sm"
                 onClick={() => setQuery(preset.query)}
                 title={preset.description}
-                style={{
-                  background: query === preset.query ? '#e2e8f0' : 'white',
-                  border: '1px solid #cbd5e1',
-                  borderRadius: '5px',
-                  padding: '0.25rem 0.55rem',
-                  fontSize: '0.78rem',
-                  fontWeight: '600',
-                  color: '#1e293b',
-                  cursor: 'pointer'
-                }}
+                className="h-7 text-[11px] font-mono px-2"
               >
                 {preset.name}
-              </button>
+              </Button>
             ))}
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <button
-              type="button"
-              onClick={handleCopyQuery}
-              style={{
-                background: 'white',
-                border: '1px solid #cbd5e1',
-                borderRadius: '5px',
-                padding: '0.25rem 0.6rem',
-                fontSize: '0.78rem',
-                color: '#475569',
-                cursor: 'pointer',
-                fontWeight: '500'
-              }}
-            >
-              {copiedQuery ? 'Copied' : 'Copy SQL'}
-            </button>
-          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={handleCopyQuery}
+            className="h-7 text-xs text-muted-foreground hover:text-foreground gap-1 self-end sm:self-auto"
+          >
+            {copiedQuery ? <Check className="h-3 w-3 text-emerald-600" /> : <Copy className="h-3 w-3" />}
+            <span>{copiedQuery ? 'Copied' : 'Copy SQL'}</span>
+          </Button>
         </div>
 
-        {/* Textarea Code Area */}
+        {/* Textarea Code Box */}
         <form onSubmit={executeQuery}>
-          <div style={{ position: 'relative' }}>
+          <div className="p-0">
             <textarea
               id="sql-query-input"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Enter your SQL SELECT query here..."
-              rows={8}
+              rows={7}
               spellCheck={false}
-              style={{
-                width: '100%',
-                padding: '1rem',
-                fontSize: '0.95rem',
-                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                lineHeight: '1.5',
-                border: 'none',
-                outline: 'none',
-                resize: 'vertical',
-                boxSizing: 'border-box',
-                background: '#ffffff',
-                color: '#0f172a'
-              }}
+              className="w-full p-4 font-mono text-sm bg-background text-foreground resize-y outline-none border-0 focus:ring-0 leading-relaxed"
             />
           </div>
 
-          {/* Masking Controls & Submit Section */}
-          <div style={{ padding: '1rem', background: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+          {/* Masking Controls & Run Query Bar */}
+          <div className="p-3 px-4 bg-muted/30 border-t flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-xs">
+            <div className="space-y-2">
               {/* Option 1: Apply Approved Masking Policies */}
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer', fontSize: '0.88rem', color: '#1e293b', fontWeight: '600' }}>
-                <input
-                  type="checkbox"
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <Checkbox
                   id="toggle-apply-masking"
                   checked={applyMasking}
-                  onChange={(e) => setApplyMasking(e.target.checked)}
-                  style={{ width: '16px', height: '16px', accentColor: '#2563eb', cursor: 'pointer' }}
+                  onCheckedChange={(checked) => setApplyMasking(Boolean(checked))}
                 />
-                <span>Stage 1: Apply Approved Masking Policies</span>
-                <span style={{ fontSize: '0.75rem', fontWeight: '500', color: '#166534', background: '#dcfce7', padding: '0.15rem 0.45rem', borderRadius: '4px', border: '1px solid #bbf7d0' }}>
+                <span className="font-medium text-foreground">Stage 1: Apply Approved Masking Policies</span>
+                <Badge variant="success" className="text-[10px] py-0 px-1.5 h-4.5 font-normal">
                   DB-Level Masking
-                </span>
+                </Badge>
               </label>
 
               {/* Option 2: Detect Suspicious Sensitive Data */}
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer', fontSize: '0.88rem', color: '#1e293b', fontWeight: '600' }}>
-                <input
-                  type="checkbox"
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <Checkbox
                   id="toggle-mask-suspicious"
                   checked={maskSuspicious}
-                  onChange={(e) => setMaskSuspicious(e.target.checked)}
-                  style={{ width: '16px', height: '16px', accentColor: '#ea580c', cursor: 'pointer' }}
+                  onCheckedChange={(checked) => setMaskSuspicious(Boolean(checked))}
                 />
-                <span>Stage 2: Detect Suspicious Sensitive Data</span>
-                <span style={{ fontSize: '0.75rem', fontWeight: '500', color: '#c2410c', background: '#ffedd5', padding: '0.15rem 0.45rem', borderRadius: '4px', border: '1px solid #fed7aa' }}>
-                  Runtime Detection (AI)
-                </span>
+                <span className="font-medium text-foreground">Stage 2: Detect Suspicious Sensitive Data</span>
+                <Badge variant="warning" className="text-[10px] py-0 px-1.5 h-4.5 font-normal">
+                  Runtime AI
+                </Badge>
               </label>
             </div>
 
-            {/* Run Button */}
-            <div>
-              <button
-                type="submit"
-                id="execute-query-btn"
-                disabled={loading || !query.trim()}
-                style={{
-                  padding: '0.65rem 1.5rem',
-                  background: loading || !query.trim() ? '#94a3b8' : '#2563eb',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '7px',
-                  fontWeight: '700',
-                  fontSize: '0.95rem',
-                  cursor: loading || !query.trim() ? 'not-allowed' : 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  boxShadow: '0 2px 4px rgba(37, 99, 235, 0.2)'
-                }}
-              >
-                {loading && <span className="spinner" style={{ width: '14px', height: '14px', borderTopColor: 'white' }} />}
-                <span>{loading ? 'Executing Query...' : 'Run Query'}</span>
-              </button>
-            </div>
+            <Button
+              type="submit"
+              id="execute-query-btn"
+              disabled={loading || !query.trim()}
+              className="h-9 px-5 gap-2 text-xs font-semibold shadow-xs shrink-0"
+            >
+              {loading ? (
+                <>
+                  <span className="h-3.5 w-3.5 rounded-full border-2 border-primary-foreground border-t-transparent animate-spin" />
+                  <span>Executing Query...</span>
+                </>
+              ) : (
+                <>
+                  <Play className="h-3.5 w-3.5 fill-current" />
+                  <span>Run Query</span>
+                </>
+              )}
+            </Button>
           </div>
         </form>
-      </div>
+      </Card>
 
-      {/* Query Results Section */}
+      {/* Query Results Viewport */}
       {results && (
-        <div style={{ marginTop: '1.5rem' }}>
+        <div className="space-y-4">
           {results.error ? (
             /* Error Card */
-            <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', padding: '1.25rem', color: '#991b1b' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: '700', fontSize: '1rem', marginBottom: '0.35rem' }}>
-                Query Execution Error
-              </div>
-              <p style={{ margin: 0, fontSize: '0.9rem', lineHeight: '1.5' }}>
-                {results.error}
-              </p>
-              <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.8rem', color: '#b91c1c' }}>
-                Tip: Ensure your query is a valid read-only SELECT statement and contains valid syntax.
-              </p>
-            </div>
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle className="text-sm font-semibold">Query Execution Error</AlertTitle>
+              <AlertDescription className="text-xs space-y-1 mt-1">
+                <p className="font-mono">{results.error}</p>
+                <p className="text-[11px] opacity-80">
+                  Tip: Ensure your query is a valid read-only SELECT statement with accessible PostgreSQL tables.
+                </p>
+              </AlertDescription>
+            </Alert>
           ) : (
-            /* Success Results View */
-            <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '10px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.03)' }}>
-              {/* Results Metadata Summary Bar */}
-              <div style={{ padding: '1rem 1.25rem', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-                {/* Stats Badges */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', background: '#f1f5f9', padding: '0.3rem 0.65rem', borderRadius: '6px', fontSize: '0.85rem', fontWeight: '600', color: '#334155' }}>
-                    <span>{results.row_count} rows</span>
-                  </div>
+            /* Results Panel */
+            <Card className="overflow-hidden shadow-xs border-border/80">
+              {/* Results Metric Header */}
+              <div className="p-3 px-4 bg-muted/40 border-b flex flex-wrap items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Badge variant="outline" className="font-mono text-[11px] gap-1 bg-background">
+                    <Rows className="h-3 w-3 text-muted-foreground" />
+                    {results.row_count} rows
+                  </Badge>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', background: '#f1f5f9', padding: '0.3rem 0.65rem', borderRadius: '6px', fontSize: '0.85rem', fontWeight: '600', color: '#334155' }}>
-                    <span>{(results.execution_time * 1000).toFixed(1)} ms</span>
-                  </div>
+                  <Badge variant="outline" className="font-mono text-[11px] gap-1 bg-background">
+                    <Clock className="h-3 w-3 text-muted-foreground" />
+                    {(results.execution_time * 1000).toFixed(1)} ms
+                  </Badge>
 
                   {results.masked_columns && results.masked_columns.length > 0 ? (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', background: '#dcfce7', color: '#166534', padding: '0.3rem 0.65rem', borderRadius: '6px', fontSize: '0.85rem', fontWeight: '700', border: '1px solid #bbf7d0' }}>
-                      <span>{results.masked_columns.length} column(s) masked ({results.masked_columns.join(', ')})</span>
-                    </div>
+                    <Badge variant="success" className="font-mono text-[11px] gap-1">
+                      <ShieldCheck className="h-3 w-3" />
+                      {results.masked_columns.length} column(s) masked ({results.masked_columns.join(', ')})
+                    </Badge>
                   ) : (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', background: '#f1f5f9', color: '#64748b', padding: '0.3rem 0.65rem', borderRadius: '6px', fontSize: '0.85rem', fontWeight: '500' }}>
-                      <span>No columns masked</span>
-                    </div>
+                    <Badge variant="secondary" className="font-mono text-[11px]">
+                      No columns masked
+                    </Badge>
                   )}
 
                   {!hasOuterLimit(query) && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', background: '#e0f2fe', color: '#0369a1', padding: '0.3rem 0.65rem', borderRadius: '6px', fontSize: '0.82rem', fontWeight: '600' }}>
-                      <span>Safe Default LIMIT Enforced</span>
-                    </div>
+                    <Badge variant="outline" className="text-[11px] border-blue-500/30 text-blue-600 dark:text-blue-400 bg-blue-500/5">
+                      Safe Default LIMIT (100)
+                    </Badge>
                   )}
                 </div>
 
-                {/* Runtime Summary Pill */}
                 {results.runtime_detection_summary && (
-                  <div style={{ fontSize: '0.82rem', background: '#ffedd5', color: '#9a3412', border: '1px solid #fed7aa', padding: '0.3rem 0.65rem', borderRadius: '6px', fontWeight: '600' }}>
+                  <Badge variant="warning" className="text-[11px] gap-1">
+                    <Sparkles className="h-3 w-3" />
                     Runtime Detection: {results.runtime_detection_summary}
-                  </div>
+                  </Badge>
                 )}
               </div>
 
               {/* Data Table */}
               {results.rows.length === 0 ? (
-                <div style={{ padding: '3rem 1rem', textAlign: 'center', color: '#64748b' }}>
-                  <div style={{ fontWeight: '600', color: '#1e293b' }}>No rows returned</div>
-                  <div style={{ fontSize: '0.85rem', marginTop: '0.25rem' }}>The query executed successfully but produced zero matching rows.</div>
+                <div className="p-12 text-center space-y-1">
+                  <div className="text-sm font-medium text-foreground">No rows returned</div>
+                  <div className="text-xs text-muted-foreground">The query executed successfully but produced zero matching rows.</div>
                 </div>
               ) : (
-                <div style={{ overflowX: 'auto', maxHeight: '500px' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.88rem' }}>
-                    <thead style={{ background: '#f1f5f9', position: 'sticky', top: 0, zIndex: 10 }}>
-                      <tr>
+                <div className="max-h-[520px] overflow-auto">
+                  <Table>
+                    <TableHeader className="sticky top-0 bg-muted/90 backdrop-blur z-10">
+                      <TableRow className="hover:bg-transparent border-b">
                         {results.columns.map((column) => {
                           const isMasked = results.masked_columns && results.masked_columns.includes(column)
                           return (
-                            <th
+                            <TableHead
                               key={column}
-                              style={{
-                                padding: '0.75rem 1rem',
-                                fontWeight: '700',
-                                color: isMasked ? '#166534' : '#1e293b',
-                                borderBottom: '2px solid #cbd5e1',
-                                background: isMasked ? '#ecfdf5' : '#f1f5f9',
-                                whiteSpace: 'nowrap'
-                              }}
+                              className={`font-mono text-xs ${isMasked ? 'text-emerald-700 dark:text-emerald-300 bg-emerald-500/15 font-semibold' : 'text-foreground'}`}
                             >
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                              <div className="flex items-center gap-1.5">
                                 <span>{column}</span>
                                 {isMasked && (
-                                  <span style={{ fontSize: '0.75rem', color: '#166534', fontWeight: '600', background: '#dcfce7', padding: '0.1rem 0.35rem', borderRadius: '3px' }}>
+                                  <Badge variant="success" className="text-[10px] h-4 px-1.5 font-mono uppercase tracking-wider font-bold">
                                     masked
-                                  </span>
+                                  </Badge>
                                 )}
                               </div>
-                            </th>
+                            </TableHead>
                           )
                         })}
-                      </tr>
-                    </thead>
-                    <tbody>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
                       {results.rows.map((row, rowIndex) => (
-                        <tr
-                          key={rowIndex}
-                          style={{
-                            borderBottom: '1px solid #f1f5f9',
-                            background: rowIndex % 2 === 0 ? '#ffffff' : '#f8fafc'
-                          }}
-                        >
+                        <TableRow key={rowIndex} className="text-xs hover:bg-muted/30">
                           {row.map((cell, cellIndex) => {
                             const colName = results.columns[cellIndex]
                             const isMasked = results.masked_columns && results.masked_columns.includes(colName)
                             return (
-                              <td
+                              <TableCell
                                 key={cellIndex}
-                                style={{
-                                  padding: '0.65rem 1rem',
-                                  color: cell === null ? '#94a3b8' : '#0f172a',
-                                  fontFamily: typeof cell === 'number' ? 'ui-monospace, monospace' : 'inherit',
-                                  whiteSpace: 'nowrap',
-                                  background: isMasked ? (rowIndex % 2 === 0 ? '#f0fdf4' : '#e6fbee') : undefined
-                                }}
+                                className={`font-mono text-xs whitespace-nowrap ${isMasked ? 'bg-emerald-500/10 dark:bg-emerald-500/20 text-emerald-800 dark:text-emerald-200 font-semibold' : ''}`}
                               >
                                 {cell === null ? (
-                                  <em style={{ color: '#94a3b8' }}>NULL</em>
+                                  <span className="text-muted-foreground/60 italic font-sans text-[11px]">NULL</span>
                                 ) : (
                                   String(cell)
                                 )}
-                              </td>
+                              </TableCell>
                             )
                           })}
-                        </tr>
+                        </TableRow>
                       ))}
-                    </tbody>
-                  </table>
+                    </TableBody>
+                  </Table>
                 </div>
               )}
-            </div>
+            </Card>
           )}
         </div>
       )}

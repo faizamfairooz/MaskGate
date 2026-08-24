@@ -1,6 +1,7 @@
 {
   "name": "maskgate-frontend",
   "version": "1.0.0",
+  "type": "module",
   "description": "Frontend for MaskGate - AI-powered database security platform",
   "scripts": {
     "dev": "vite",
