@@ -1,0 +1,51 @@
+flowchart TB
+    USER["Developer / Database User"]
+
+    subgraph FRONTEND["Frontend (React 18 + Vite + Tailwind CSS)"]
+        DASH["Dashboard\n- System status & counts\n- Recent query audit"]
+        SCHEMA["Schema Browser\n- Tables & column viewer\n- AI analysis trigger"]
+        POLICY["Masking Policies\n- Recommendation review\n- Policy management & editor"]
+        QUERY["Query Editor\n- SQL editor & validator\n- Masked query execution\n- Two-stage result inspector"]
+    end
+
+    subgraph BACKEND["Backend API (FastAPI)"]
+        API["REST API Router (/api/v1)"]
+        
+        subgraph SERVICES["Application Services"]
+            SCHEMA_SVC["Schema Service\n(Catalog extraction)"]
+            AI_ANALYZER["AI Schema Analyzer\n(LangChain + Heuristics)"]
+            MASKING_SVC["Masking Service\n(Policy & Engine Facade)"]
+            QUERY_SVC["Query Service\n(SQL validation & execution)"]
+            PARSER["SQL Query Parser\n(AST & rewrite engine)"]
+            DETECTOR["Runtime Detector\n(Regex & bounded LLM)"]
+        end
+    end
+
+    subgraph DATABASE["PostgreSQL Database"]
+        APP_TABLES["Application Tables\n(patients, medical_records, etc.)"]
+        POLICY_TABLE["Masking Metadata Tables\n(masking_policies, masking_recommendations)"]
+        DB_FUNCS["Stored Masking Functions\n(maskgate_policy_<id>, maskgate_fn_*)"]
+    end
+
+    subgraph LLM_PROVIDERS["Configurable LLM Provider"]
+        LLM_GW["LangChain Gateway\n(OpenAI GPT-4 / Google Gemini)"]
+    end
+
+    USER --> FRONTEND
+    FRONTEND -->|HTTP / JSON| API
+    API --> SCHEMA_SVC
+    API --> AI_ANALYZER
+    API --> MASKING_SVC
+    API --> QUERY_SVC
+
+    AI_ANALYZER -->|Metadata Prompts| LLM_GW
+    AI_ANALYZER -->|Persist Recommendations| POLICY_TABLE
+    MASKING_SVC -->|Manage Policies| POLICY_TABLE
+    MASKING_SVC -->|Deploy Functions| DB_FUNCS
+
+    QUERY_SVC --> PARSER
+    PARSER -->|Fetch Table Schema & Active Policies| POLICY_TABLE
+    QUERY_SVC -->|Execute Rewritten SQL| APP_TABLES
+    APP_TABLES -->|Applies Stored Functions| DB_FUNCS
+    QUERY_SVC -->|Unmasked Cells Scan| DETECTOR
+    DETECTOR -.->|Optional LLM Sample Scan| LLM_GW

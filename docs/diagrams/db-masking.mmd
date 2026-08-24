@@ -1,0 +1,25 @@
+flowchart TD
+    subgraph ADMIN_FLOW["Policy Activation"]
+        POLICY["Active Masking Policy (ID: <id>)\nTable: patients, Column: email, Strategy: EMAIL"]
+        GEN_SQL["Generate PL/pgSQL Function Body\nmaskgate_policy_<id>(val text)"]
+        EXEC_DDL["CREATE OR REPLACE FUNCTION maskgate_policy_<id>(val text)\nRETURNS text AS $$ ... $$ LANGUAGE plpgsql IMMUTABLE;"]
+    end
+
+    subgraph QUERY_FLOW["Query Execution at Runtime"]
+        USER_SQL["User SQL: SELECT email FROM patients;"]
+        REWRITE_SQL["Rewritten SQL: SELECT maskgate_policy_1(email::text) AS email FROM patients;"]
+        PG_ENGINE["PostgreSQL Query Engine"]
+        IMMUTABLE_FN["maskgate_policy_1(email) -> maskgate_fn_email(email)"]
+        BASE_FN["PL/pgSQL Base Function: j***@example.com"]
+        RESULT["Masked Result to Application"]
+    end
+
+    POLICY --> GEN_SQL
+    GEN_SQL --> EXEC_DDL
+    EXEC_DDL --> IMMUTABLE_FN
+
+    USER_SQL --> REWRITE_SQL
+    REWRITE_SQL --> PG_ENGINE
+    PG_ENGINE --> IMMUTABLE_FN
+    IMMUTABLE_FN --> BASE_FN
+    BASE_FN --> RESULT

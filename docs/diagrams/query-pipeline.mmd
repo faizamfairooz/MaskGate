@@ -1,0 +1,54 @@
+flowchart TD
+    USER_QUERY["User SQL Query"]
+    
+    subgraph VALIDATION["1. Security Validation & Guardrails"]
+        VAL_CHECK{"Is Query Valid?"}
+        REJECT_ERR["Raise 400 Bad Request\n(Keyword / Multi-statement / Non-SELECT)"]
+    end
+
+    subgraph PARSING["2. SQL AST & Structure Analysis"]
+        CLEAN["Strip SQL Comments & String Literals"]
+        EXTRACT_TABLES["Extract Tables, Aliases & JOINs"]
+        APPLY_LIMIT["Inject Default LIMIT if missing"]
+    end
+
+    subgraph REWRITE["3. Query Rewriting (Stage 1: DB-Level Masking)"]
+        ACTIVE_POLICIES["Fetch Active Policies for Referenced Tables"]
+        EXPAND_WILDCARDS["Expand SELECT * or alias.* to explicit columns"]
+        INJECT_FUNCS["Replace Protected Columns with maskgate_policy_<id>(col::text) AS col\n(or '[HIDDEN]' for DO_NOT_SHOW)"]
+        TRANSFORMED_SQL["Rewritten SQL Query"]
+    end
+
+    subgraph EXEC["4. PostgreSQL Execution"]
+        PG_EXEC["Execute SQL in PostgreSQL"]
+        PG_MASK["PostgreSQL executes stored PL/pgSQL masking functions during projection"]
+        PG_RESULTS["Query Results (Stage 1 Masked)"]
+    end
+
+    subgraph RUNTIME_SCAN["5. Stage 2: Runtime Sensitive-Data Detection"]
+        AUTO_DETECT_CHECK{"mask_suspicious = true?"}
+        LOCAL_REGEX["Scan Unmasked Cells with Regex (Email, Phone, SSN, CC, IP)"]
+        LLM_SAMPLE_SCAN["Optional Bounded LLM Scan on Unmasked Sample Rows"]
+        CELL_MASK["Apply in-memory masking to newly detected sensitive cells"]
+    end
+
+    FINAL_RESULT["Safe Masked Query Results + Execution Metadata"]
+
+    USER_QUERY --> VAL_CHECK
+    VAL_CHECK -->|No| REJECT_ERR
+    VAL_CHECK -->|Yes| CLEAN
+    CLEAN --> EXTRACT_TABLES
+    EXTRACT_TABLES --> APPLY_LIMIT
+    APPLY_LIMIT --> ACTIVE_POLICIES
+    ACTIVE_POLICIES --> EXPAND_WILDCARDS
+    EXPAND_WILDCARDS --> INJECT_FUNCS
+    INJECT_FUNCS --> TRANSFORMED_SQL
+    TRANSFORMED_SQL --> PG_EXEC
+    PG_EXEC --> PG_MASK
+    PG_MASK --> PG_RESULTS
+    PG_RESULTS --> AUTO_DETECT_CHECK
+    AUTO_DETECT_CHECK -->|Yes| LOCAL_REGEX
+    LOCAL_REGEX --> LLM_SAMPLE_SCAN
+    LLM_SAMPLE_SCAN --> CELL_MASK
+    CELL_MASK --> FINAL_RESULT
+    AUTO_DETECT_CHECK -->|No| FINAL_RESULT

@@ -1,0 +1,30 @@
+flowchart TD
+    QUERY["User SQL Query"]
+
+    subgraph STAGE1["Stage 1: PostgreSQL Database-Level Masking"]
+        direction TB
+        REWRITE["SQL AST Rewriting (injecting policy functions)"]
+        PG_PROC["PostgreSQL Engine executes PL/pgSQL stored masking functions"]
+        ZERO_MUTATION["Zero DB Mutation Guarantee (original tables untouched)"]
+        STAGE1_OUT["Stage 1 Masked Query Results"]
+        REWRITE --> PG_PROC
+        PG_PROC --> ZERO_MUTATION
+        ZERO_MUTATION --> STAGE1_OUT
+    end
+
+    subgraph STAGE2["Stage 2: Runtime Sensitive-Data Detection (Secondary Defense)"]
+        direction TB
+        CHECK["Scan unmasked columns / newly exposed data"]
+        REGEX_SCAN["Deterministic Cell Regex (Email, Phone, SSN, CC, IP)"]
+        LLM_SCAN["Bounded Semantic LLM Scan (Names, addresses, notes)"]
+        IN_MEMORY["In-Memory Cell Masking for Uncovered PII"]
+        CHECK --> REGEX_SCAN
+        REGEX_SCAN --> LLM_SCAN
+        LLM_SCAN --> IN_MEMORY
+    end
+
+    FINAL["Safe Masked Result Set + Audit Metadata"]
+
+    QUERY --> STAGE1
+    STAGE1_OUT --> STAGE2
+    IN_MEMORY --> FINAL

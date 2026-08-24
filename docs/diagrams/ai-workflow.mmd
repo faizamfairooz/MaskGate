@@ -1,0 +1,40 @@
+flowchart TD
+    SCHEMA["PostgreSQL Schema"]
+    EXTRACT["Metadata Extraction\n(Table name, Column names, Data types)"]
+    SANITIZATION["Metadata Sanitization\n(Zero row data; schema metadata only)"]
+    
+    subgraph ANALYSIS["AI Analysis Engine"]
+        LLM_CHECK{"LLM Configured & Available?"}
+        LLM_CALL["LangChain Prompt Execution\n(OpenAI / Gemini)"]
+        HEURISTIC["Deterministic Pattern Matching\n(Regex fallback on column names)"]
+        VALIDATE["Schema Cross-Validation\n(Discard hallucinated columns)"]
+    end
+
+    RECS["Structured Recommendations\n(Sensitivity, Strategy, Confidence, Rationale)"]
+    QUEUE["Persist in DB with Status: PENDING\n(masking_recommendations table)"]
+    
+    subgraph REVIEW["Administrator Review (Dashboard)"]
+        ADMIN{"Admin Decision"}
+        APPROVE["Approve Recommendation"]
+        REJECT["Reject Recommendation"]
+    end
+
+    ACTIVE_POLICY["Active Masking Policy\n(masking_policies table)"]
+    DB_FUNCTION["Deploy Stored Function\n(CREATE OR REPLACE FUNCTION maskgate_policy_<id>)"]
+    REJECTED_REC["Recommendation Status: REJECTED\n(No policy or DB function created)"]
+
+    SCHEMA --> EXTRACT
+    EXTRACT --> SANITIZATION
+    SANITIZATION --> LLM_CHECK
+    LLM_CHECK -->|Yes| LLM_CALL
+    LLM_CHECK -->|No / Error| HEURISTIC
+    LLM_CALL --> VALIDATE
+    HEURISTIC --> VALIDATE
+    VALIDATE --> RECS
+    RECS --> QUEUE
+    QUEUE --> REVIEW
+    ADMIN -->|Approve| APPROVE
+    ADMIN -->|Reject| REJECT
+    APPROVE --> ACTIVE_POLICY
+    ACTIVE_POLICY --> DB_FUNCTION
+    REJECT --> REJECTED_REC

@@ -1,0 +1,42 @@
+flowchart TD
+    subgraph DISCOVERY["1. Discovery & Analysis"]
+        SCHEMA_SCAN["Schema Discovery"]
+        AI_REC["AI Recommendation Generated\n(Status: PENDING)"]
+    end
+
+    subgraph REVIEW["2. Human Review"]
+        ADMIN_REVIEW{"Administrator Review\n(/masking UI)"}
+        REJECT_ACTION["Reject Recommendation\n(Status: REJECTED)"]
+        APPROVE_ACTION["Approve Recommendation\n(Status: APPROVED)"]
+    end
+
+    subgraph POLICY_STATE["3. Policy State Management"]
+        CREATE_POLICY["Create Active Masking Policy\n(Status: ACTIVE, is_active: true)"]
+        CREATE_FUNC["Deploy PostgreSQL Stored Function\n(maskgate_policy_<id>)"]
+        MANUAL_EDIT["Admin Update / Parameter Adjustment\n(e.g., visible_chars, bin_size)"]
+        RECREATE_FUNC["Update DB Function\n(CREATE OR REPLACE)"]
+        DEACTIVATE["Deactivate / Delete Policy\n(Status: DISABLED / DELETED)"]
+        DROP_FUNC["Drop PostgreSQL Function\n(DROP FUNCTION maskgate_policy_<id>)"]
+        REACTIVATE["Reactivate Policy\n(Status: ACTIVE)"]
+    end
+
+    subgraph EXECUTION["4. Query Execution"]
+        QUERY_TRANSFORM["Query AST Rewriting & DB Masking"]
+    end
+
+    SCHEMA_SCAN --> AI_REC
+    AI_REC --> ADMIN_REVIEW
+    ADMIN_REVIEW -->|Reject| REJECT_ACTION
+    ADMIN_REVIEW -->|Approve| APPROVE_ACTION
+    APPROVE_ACTION --> CREATE_POLICY
+    CREATE_POLICY --> CREATE_FUNC
+    CREATE_FUNC --> QUERY_TRANSFORM
+
+    CREATE_POLICY --> MANUAL_EDIT
+    MANUAL_EDIT --> RECREATE_FUNC
+    RECREATE_FUNC --> QUERY_TRANSFORM
+
+    CREATE_POLICY --> DEACTIVATE
+    DEACTIVATE --> DROP_FUNC
+    DROP_FUNC --> REACTIVATE
+    REACTIVATE --> CREATE_FUNC
